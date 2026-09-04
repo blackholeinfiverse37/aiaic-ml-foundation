@@ -1,15 +1,14 @@
 """
-Pydantic request/response schemas for the FastAPI service.
+Pydantic request/response schemas for the AIAIC ML Foundation v1 API.
 
-Kept deliberately close to the raw feature set rather than requiring
-callers to pre-compute lag/rolling features themselves in most cases —
-but since the model DOES need them, we accept them as optional fields
-and let predictor.py handle nulls explicitly rather than the API
-layer guessing.
+v1 adds:
+- request_id on every response (UUID for tracing)
+- execution_status field
+- versioned response model
+- ready check response
 """
 
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -24,8 +23,6 @@ class PredictionRequest(BaseModel):
     month_cos: Optional[float] = None
     grade: Optional[str] = Field(default="FAQ", examples=["FAQ", "Local"])
 
-    # Recent price history — caller supplies these if known; the more
-    # of these that are present, the better the prediction quality.
     modal_price_lag_1: Optional[float] = Field(default=None, description="Modal price 1 day ago")
     modal_price_lag_7: Optional[float] = Field(default=None, description="Modal price 7 days ago")
     modal_price_lag_14: Optional[float] = Field(default=None, description="Modal price 14 days ago")
@@ -40,20 +37,33 @@ class PredictionRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
+    request_id: str
+    execution_status: str
     predicted_modal_price: float
     model_file: Optional[str]
+    model_version: Optional[str]
     trained_at: Optional[str]
     data_hash: Optional[str]
     features_used: List[str]
     features_missing: List[str]
+    replay_file: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_file: Optional[str] = None
+    model_version: Optional[str] = None
     mongo_available: bool
+    api_version: str
+
+
+class ReadyResponse(BaseModel):
+    ready: bool
+    reason: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
+    request_id: Optional[str]
     detail: str
+    execution_status: str = "FAILED"

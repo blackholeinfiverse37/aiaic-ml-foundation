@@ -24,6 +24,9 @@ import json
 import sys
 from pathlib import Path
 
+# Add project root to path so src/ is importable when run as a script
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import requests
 
 from src.observability.replay import load_execution, list_executions

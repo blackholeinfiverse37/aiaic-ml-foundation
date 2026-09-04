@@ -1,0 +1,13 @@
+{
+  "request_id": "40f5f999-721f-4ca4-9a9a-23a9af902703",
+  "consumed_at": "2026-09-04T04:26:31.251946+00:00",
+  "commodity": "Onion",
+  "state": " Punjab",
+  "predicted_modal_price": 949.46,
+  "income_assessment": {
+    "msp_reference": 800,
+    "price_vs_msp": 149.46,
+    "income_signal": "ABOVE_MSP",
+    "recommendation": "Predicted price (949) is above MSP (800). Market conditions appear favourable for Onion in  Punjab."
+  }
+}

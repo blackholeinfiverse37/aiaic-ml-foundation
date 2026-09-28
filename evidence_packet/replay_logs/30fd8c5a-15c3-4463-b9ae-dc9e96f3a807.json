@@ -1,0 +1,31 @@
+{
+  "request_id": "30fd8c5a-15c3-4463-b9ae-dc9e96f3a807",
+  "recorded_at": "2026-09-27T18:40:54.471035+00:00",
+  "status": "FAILED",
+  "payload": {
+    "commodity": "Onion",
+    "state": "Maharashtra",
+    "month": 8,
+    "day_of_week": null,
+    "is_weekend": null,
+    "season": "kharif",
+    "month_sin": null,
+    "month_cos": null,
+    "grade": "FAQ",
+    "modal_price_lag_1": 1200.0,
+    "modal_price_lag_7": 1150.0,
+    "modal_price_lag_14": 1100.0,
+    "modal_price_roll_mean_7": 1175.0,
+    "modal_price_roll_std_7": 35.0,
+    "modal_price_roll_mean_14": 1160.0,
+    "modal_price_roll_std_14": 40.0,
+    "modal_price_roll_mean_30": 1140.0,
+    "modal_price_roll_std_30": 50.0,
+    "min_price": 1100.0,
+    "max_price": 1300.0
+  },
+  "result": {},
+  "error": "Model inference failed: train and valid dataset categorical_feature do not match.",
+  "model_file": null,
+  "data_hash": null
+}

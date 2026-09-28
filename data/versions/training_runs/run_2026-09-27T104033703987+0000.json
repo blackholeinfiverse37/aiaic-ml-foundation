@@ -1,0 +1,43 @@
+{
+  "run_at": "2026-09-27T10:40:33.703987+00:00",
+  "data_hash": "78d16a7e9a219fa2cb1711dfdbe74546cf0e6ae84350857997f6e77022c65392",
+  "model_file": "price_predictor_20260927T104033Z_78d16a7e.joblib",
+  "model_type": "lightgbm",
+  "metrics": {
+    "mae": 44.0656,
+    "rmse": 91.6882,
+    "mape_pct": 4.5197,
+    "r2": 0.9946
+  },
+  "baseline_metrics": {
+    "mae": 435.4616,
+    "rmse": 758.2338,
+    "mape_pct": 26.0242,
+    "r2": 0.6316
+  },
+  "feature_columns": [
+    "state",
+    "commodity",
+    "grade",
+    "min_price",
+    "max_price",
+    "month",
+    "day_of_week",
+    "is_weekend",
+    "season",
+    "month_sin",
+    "month_cos",
+    "modal_price_lag_1",
+    "modal_price_lag_7",
+    "modal_price_lag_14",
+    "modal_price_roll_mean_7",
+    "modal_price_roll_std_7",
+    "modal_price_roll_mean_14",
+    "modal_price_roll_std_14",
+    "modal_price_roll_mean_30",
+    "modal_price_roll_std_30"
+  ],
+  "train_rows": 699750,
+  "test_rows": 36024,
+  "random_seed": 42
+}

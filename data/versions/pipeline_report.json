@@ -16,7 +16,7 @@
     ],
     "source": "local_raw_csvs",
     "hash": "649c02fb2d7e",
-    "duration_sec": 13.25
+    "duration_sec": 8.47
   },
   "validation": {
     "clean_rows": 737389,
@@ -26,12 +26,12 @@
       "price_out_of_valid_range": 3
     },
     "hash": "84322ce525d7",
-    "duration_sec": 5.97
+    "duration_sec": 6.28
   },
   "preprocessing": {
     "rows": 737389,
     "hash": "971f9394762c",
-    "duration_sec": 17.81
+    "duration_sec": 16.0
   },
   "features": {
     "rows": 735774,
@@ -53,10 +53,10 @@
       "modal_price_roll_std_30"
     ],
     "hash": "78d16a7e9a21",
-    "duration_sec": 59.5
+    "duration_sec": 43.19
   },
   "training": {
-    "model_file": "C:\\Users\\Tushar\\Downloads\\aiaic-ml\\aiaic-ml-foundation\\models\\price_predictor_20260815T065020Z_78d16a7e.joblib",
+    "model_file": "C:\\Users\\Tushar\\Downloads\\aiaic-ml\\aiaic-ml-foundation\\models\\price_predictor_20260928T091607Z_78d16a7e.joblib",
     "metrics": {
       "mae": 44.0656,
       "rmse": 91.6882,
@@ -70,7 +70,7 @@
       "r2": 0.6316
     },
     "beats_baseline": true,
-    "duration_sec": 53.39
+    "duration_sec": 17.91
   },
-  "total_duration_sec": 150.01
+  "total_duration_sec": 91.91
 }

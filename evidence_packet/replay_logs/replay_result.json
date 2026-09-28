@@ -1,10 +1,10 @@
 {
-  "original_request_id": "40f5f999-721f-4ca4-9a9a-23a9af902703",
-  "original_recorded_at": "2026-09-04T04:26:28.344373+00:00",
-  "original_model_file": "price_predictor_20260815T065020Z_78d16a7e.joblib",
+  "original_request_id": "8ece5f11-ad79-4086-a8a6-e291c2f0041f",
+  "original_recorded_at": "2026-09-28T06:39:26.997428+00:00",
+  "original_model_file": "price_predictor_20260928T062021Z_78d16a7e.joblib",
   "original_predicted_price": 949.46,
-  "replayed_request_id": "cdcbfd9e-0678-49ec-9435-b32192b77587",
-  "replayed_model_file": "price_predictor_20260815T065020Z_78d16a7e.joblib",
+  "replayed_request_id": "a3fafa85-a5d9-4af9-afde-305416f256d0",
+  "replayed_model_file": "price_predictor_20260928T062021Z_78d16a7e.joblib",
   "replayed_predicted_price": 949.46,
   "deterministic": true,
   "payload": {

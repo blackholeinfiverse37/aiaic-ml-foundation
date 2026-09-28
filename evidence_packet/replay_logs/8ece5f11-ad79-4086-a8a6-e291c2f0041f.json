@@ -1,16 +1,17 @@
 {
+  "request_id": "8ece5f11-ad79-4086-a8a6-e291c2f0041f",
+  "recorded_at": "2026-09-28T06:39:26.997428+00:00",
+  "status": "SUCCESS",
   "payload": {
     "commodity": "Onion",
     "state": " Punjab",
-    "grade": "FAQ",
-    "min_price": 900.0,
-    "max_price": 1000.0,
     "month": 6,
     "day_of_week": 0,
     "is_weekend": 0,
     "season": "kharif",
     "month_sin": 1.2246467991473532e-16,
     "month_cos": -1.0,
+    "grade": "FAQ",
     "modal_price_lag_1": 1025.0,
     "modal_price_lag_7": 1005.0,
     "modal_price_lag_14": 1100.0,
@@ -19,15 +20,14 @@
     "modal_price_roll_mean_14": 1175.2857142857142,
     "modal_price_roll_std_14": 204.95306350908308,
     "modal_price_roll_mean_30": 1179.9333333333334,
-    "modal_price_roll_std_30": 198.316293785842
+    "modal_price_roll_std_30": 198.316293785842,
+    "min_price": 900.0,
+    "max_price": 1000.0
   },
-  "response": {
-    "request_id": "44c955ba-668e-442c-9ce9-6a0fd54911c0",
-    "execution_status": "SUCCESS",
+  "result": {
     "predicted_modal_price": 949.46,
-    "model_file": "price_predictor_20260928T091607Z_78d16a7e.joblib",
-    "model_version": "20260928T091607Z",
-    "trained_at": "20260928T091607Z",
+    "model_file": "price_predictor_20260928T062021Z_78d16a7e.joblib",
+    "trained_at": "20260928T062021Z",
     "data_hash": "78d16a7e9a219fa2cb1711dfdbe74546cf0e6ae84350857997f6e77022c65392",
     "features_used": [
       "state",
@@ -51,8 +51,9 @@
       "modal_price_roll_mean_30",
       "modal_price_roll_std_30"
     ],
-    "features_missing": [],
-    "replay_file": "evidence_packet\\replay_logs\\44c955ba-668e-442c-9ce9-6a0fd54911c0.json"
+    "features_missing": []
   },
-  "status_code": 200
+  "error": null,
+  "model_file": "price_predictor_20260928T062021Z_78d16a7e.joblib",
+  "data_hash": "78d16a7e9a219fa2cb1711dfdbe74546cf0e6ae84350857997f6e77022c65392"
 }

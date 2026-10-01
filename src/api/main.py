@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from src.config.settings import settings
 from src.api.routes import router
+from src.api.forecast_routes import router as forecast_router
 from src.observability.logger import setup_structured_logging, get_logger
 
 setup_structured_logging(level=settings.log_level)
@@ -28,6 +29,7 @@ app = FastAPI(
 )
 
 app.include_router(router)
+app.include_router(forecast_router)   # /v1/forecast: the endpoint AIAIC calls
 
 
 @app.get("/")
@@ -41,6 +43,7 @@ def root():
         "health": "/v1/health",
         "ready": "/v1/ready",
         "predict": "/v1/predict",
+        "forecast": "/v1/forecast",
     }
 
 

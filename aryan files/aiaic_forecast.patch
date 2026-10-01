@@ -1,0 +1,860 @@
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 97a8579..07c7b36 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -37,6 +37,6 @@ EXPOSE 8000
+ # Health check hits our own /health endpoint so `docker ps` and
+ # orchestrators (Compose, k8s) can detect a degraded (no model) state.
+ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
++    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health')" || exit 1
+ 
+ CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+\ No newline at end of file
+diff --git a/src/api/forecast_routes.py b/src/api/forecast_routes.py
+new file mode 100644
+index 0000000..1fbcb6b
+--- /dev/null
++++ b/src/api/forecast_routes.py
+@@ -0,0 +1,48 @@
++"""`/v1/forecast`: the endpoint AIAIC calls. `/v1/predict` stays as it was (see src/forecast/__init__.py for why it
++is not used by AIAIC)."""
++
++from __future__ import annotations
++
++import uuid
++from datetime import date
++from typing import List, Optional
++
++from fastapi import APIRouter, HTTPException
++from pydantic import BaseModel, Field
++
++from src.config.settings import settings
++from src.forecast.service import ForecastUnavailable, forecast, list_meta
++
++router = APIRouter(prefix="/v1")
++
++
++class HistoryPoint(BaseModel):
++    date: date
++    modal_price: float = Field(gt=0, le=1_000_000)
++
++
++class ForecastRequest(BaseModel):
++    commodity: str = Field(min_length=1, max_length=64, examples=["Onion"])
++    state: str = Field(min_length=1, max_length=64, examples=["Maharashtra"])
++    market: str = Field(min_length=1, max_length=96, examples=["Lasalgaon"])
++    as_of: date = Field(examples=["2025-10-01"])
++    horizon_days: int = Field(ge=1, le=90, examples=[7])
++    history: Optional[List[HistoryPoint]] = Field(default=None, max_length=400,
++                                                  description="Optional: this mandi's recent prices, oldest first")
++
++
++@router.post("/forecast")
++def post_forecast(req: ForecastRequest) -> dict:
++    try:
++        out = forecast(req.model_dump(mode="json"), str(settings.models_dir))
++    except ForecastUnavailable as e:
++        raise HTTPException(status_code=503, detail=str(e)) from None
++    return {"request_id": str(uuid.uuid4()), "execution_status": "SUCCESS", **out}
++
++
++@router.get("/forecast/meta")
++def get_forecast_meta() -> dict:
++    try:
++        return list_meta(str(settings.models_dir))
++    except ForecastUnavailable as e:
++        raise HTTPException(status_code=503, detail=str(e)) from None
+diff --git a/src/api/main.py b/src/api/main.py
+index f28d1a0..53cd0ab 100644
+--- a/src/api/main.py
++++ b/src/api/main.py
+@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
+ 
+ from src.config.settings import settings
+ from src.api.routes import router
++from src.api.forecast_routes import router as forecast_router
+ from src.observability.logger import setup_structured_logging, get_logger
+ 
+ setup_structured_logging(level=settings.log_level)
+@@ -28,6 +29,7 @@ app = FastAPI(
+ )
+ 
+ app.include_router(router)
++app.include_router(forecast_router)   # /v1/forecast: the endpoint AIAIC calls
+ 
+ 
+ @app.get("/")
+@@ -41,6 +43,7 @@ def root():
+         "health": "/v1/health",
+         "ready": "/v1/ready",
+         "predict": "/v1/predict",
++        "forecast": "/v1/forecast",
+     }
+ 
+ 
+diff --git a/src/forecast/__init__.py b/src/forecast/__init__.py
+new file mode 100644
+index 0000000..9695e63
+--- /dev/null
++++ b/src/forecast/__init__.py
+@@ -0,0 +1,13 @@
++"""Price FORECAST for AIAIC: a range for a future date, from information known on the day it is asked.
++
++Separate from `src/training` and `/v1/predict` on purpose. That model reads the SAME day's min and max price to
++predict the same day's modal price, so it describes a day that is already known; it cannot say anything about next
++week. This package answers the question AIAIC asks: "on `as_of`, what range is the modal price likely to be in
++`horizon_days` from now, and has this model beaten the simple rule 'the price stays where it is'?"
++
++Rules every module here keeps (tests in `tests/forecast/` fail when one is broken):
++- a feature for `as_of` uses only prices dated ON OR BEFORE `as_of`; never min/max, never the target day;
++- lags are by DATE within ONE mandi (never "the previous row", which is another mandi on the same day);
++- the answer is a range (p10, p50, p90), with its backtest beside it;
++- a crop, state or mandi the model was not trained on is refused, never guessed.
++"""
+diff --git a/src/forecast/series.py b/src/forecast/series.py
+new file mode 100644
+index 0000000..1f4dd5b
+--- /dev/null
++++ b/src/forecast/series.py
+@@ -0,0 +1,140 @@
++"""Daily price series per mandi, and the features known on a given day.
++
++A "series" is one (commodity, state, market): one modal price per date (the median when a mandi reports a crop
++more than once on a day, e.g. several varieties). Everything here works on DATES, never on row positions.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++from typing import Dict, Iterable, List, Optional, Tuple
++
++import numpy as np
++import pandas as pd
++
++KEYS = ["commodity", "state", "market"]
++
++#: How far back a "price N days ago" may reach for the last quote on or before that day. Mandis do not report
++#: every day (holidays, no arrivals); beyond this the feature is missing, not borrowed from further back.
++ASOF_TOLERANCE_DAYS = 7
++
++#: A target (the price `horizon` days ahead) counts only if the mandi quoted within this many days AFTER the target
++#: date; otherwise that training sample is dropped rather than paired with a far-off price.
++TARGET_TOLERANCE_DAYS = 3
++
++LAG_DAYS = (7, 14, 30)
++WINDOW_DAYS = 30
++
++#: Features the model reads. None of them is dated after `as_of`, and none is a min/max price.
++NUMERIC_FEATURES = [
++    "last_price", "days_since_last", "price_lag_7", "price_lag_14", "price_lag_30",
++    "roll_mean_30", "roll_std_30", "roll_n_30", "change_7_pct", "change_30_pct",
++    "horizon_days", "target_month_sin", "target_month_cos",
++]
++CATEGORICAL_FEATURES = ["commodity", "state", "market"]
++FEATURES = CATEGORICAL_FEATURES + NUMERIC_FEATURES
++
++
++def daily_series(df: pd.DataFrame) -> pd.DataFrame:
++    """One row per (commodity, state, market, date): the median modal price that day. Input columns: commodity,
++    state, market, date, modal_price (any others are ignored). Rows without a market are dropped: a state-wide
++    'series' mixes mandis hundreds of km apart."""
++    need = {"commodity", "state", "market", "date", "modal_price"}
++    missing = need - set(df.columns)
++    if missing:
++        raise ValueError(f"daily_series needs columns {sorted(missing)}")
++    d = df[list(need)].copy()
++    d = d.dropna(subset=["market", "modal_price", "date"])
++    d["date"] = pd.to_datetime(d["date"]).dt.normalize()
++    for k in KEYS:
++        d[k] = d[k].astype(str).str.strip()
++    d = d[d["modal_price"] > 0]
++    out = (d.groupby(KEYS + ["date"], observed=True)["modal_price"].median().reset_index()
++           .sort_values(KEYS + ["date"]).reset_index(drop=True))
++    return out
++
++
++@dataclass(frozen=True)
++class Series:
++    """One mandi's dated prices, for as-of lookups."""
++    dates: np.ndarray    # datetime64[D], sorted ascending
++    prices: np.ndarray   # float
++
++    @classmethod
++    def from_frame(cls, g: pd.DataFrame) -> "Series":
++        g = g.sort_values("date")
++        return cls(g["date"].values.astype("datetime64[D]"), g["modal_price"].to_numpy(dtype=float))
++
++    def asof(self, day: np.datetime64, tolerance_days: int = ASOF_TOLERANCE_DAYS) -> Tuple[Optional[float], Optional[int]]:
++        """(price, age in days) of the last quote on or before `day`, within the tolerance; (None, None) otherwise."""
++        i = int(np.searchsorted(self.dates, day, side="right")) - 1
++        if i < 0:
++            return None, None
++        age = int((day - self.dates[i]).astype(int))
++        if age > tolerance_days:
++            return None, None
++        return float(self.prices[i]), age
++
++    def first_on_or_after(self, day: np.datetime64, tolerance_days: int = TARGET_TOLERANCE_DAYS) -> Optional[float]:
++        i = int(np.searchsorted(self.dates, day, side="left"))
++        if i >= len(self.dates):
++            return None
++        if int((self.dates[i] - day).astype(int)) > tolerance_days:
++            return None
++        return float(self.prices[i])
++
++    def window(self, end: np.datetime64, days: int) -> np.ndarray:
++        """Prices dated in (end - days, end]: strictly the past, the end day included."""
++        lo = int(np.searchsorted(self.dates, end - np.timedelta64(days, "D"), side="right"))
++        hi = int(np.searchsorted(self.dates, end, side="right"))
++        return self.prices[lo:hi]
++
++
++def features_as_of(key: Tuple[str, str, str], s: Series, as_of: np.datetime64, horizon_days: int) -> Optional[Dict]:
++    """The feature row for asking, on `as_of`, about `as_of + horizon_days`. None when the mandi has no quote in the
++    last ASOF_TOLERANCE_DAYS days (nothing current to forecast from)."""
++    last, age = s.asof(as_of)
++    if last is None:
++        return None
++    lag = {k: s.asof(as_of - np.timedelta64(k, "D"))[0] for k in LAG_DAYS}
++    win = s.window(as_of, WINDOW_DAYS)
++    target_day = pd.Timestamp(as_of + np.timedelta64(horizon_days, "D"))
++    month = target_day.month
++    row = {
++        "commodity": key[0], "state": key[1], "market": key[2],
++        "last_price": last, "days_since_last": float(age),
++        "price_lag_7": lag[7], "price_lag_14": lag[14], "price_lag_30": lag[30],
++        "roll_mean_30": float(win.mean()) if len(win) else None,
++        "roll_std_30": float(win.std(ddof=1)) if len(win) > 1 else None,
++        "roll_n_30": float(len(win)),
++        "change_7_pct": (100.0 * (last / lag[7] - 1.0)) if lag[7] else None,
++        "change_30_pct": (100.0 * (last / lag[30] - 1.0)) if lag[30] else None,
++        "horizon_days": float(horizon_days),
++        "target_month_sin": math.sin(2 * math.pi * month / 12.0),
++        "target_month_cos": math.cos(2 * math.pi * month / 12.0),
++    }
++    return row
++
++
++def training_samples(daily: pd.DataFrame, horizons: Iterable[int], step_days: int = 7) -> pd.DataFrame:
++    """(features, target) pairs: for each mandi, an `as_of` every `step_days` days, and for each horizon the first
++    quote within TARGET_TOLERANCE_DAYS after `as_of + horizon`. Columns: FEATURES + as_of, target_date, target."""
++    rows: List[Dict] = []
++    for key, g in daily.groupby(KEYS, observed=True, sort=True):
++        s = Series.from_frame(g)
++        if len(s.dates) < 10:
++            continue
++        start, end = s.dates[0] + np.timedelta64(WINDOW_DAYS, "D"), s.dates[-1]
++        for as_of in np.arange(start, end + np.timedelta64(1, "D"), np.timedelta64(step_days, "D")):
++            for h in horizons:
++                target_day = as_of + np.timedelta64(h, "D")
++                y = s.first_on_or_after(target_day)
++                if y is None:
++                    continue
++                f = features_as_of(key, s, as_of, h)
++                if f is None:
++                    continue
++                f.update({"as_of": pd.Timestamp(as_of), "target_date": pd.Timestamp(target_day), "target": y})
++                rows.append(f)
++    return pd.DataFrame(rows)
+diff --git a/src/forecast/service.py b/src/forecast/service.py
+new file mode 100644
+index 0000000..90a8c8d
+--- /dev/null
++++ b/src/forecast/service.py
+@@ -0,0 +1,136 @@
++"""Answer a forecast request from the latest trained bundle, or say plainly why not.
++
++Abstains (answers with `abstain: true` and a reason code, never a guessed range) when:
++- `not_trained_for`: the commodity, state or mandi is not in the model's closed lists;
++- `horizon_not_trained`: the horizon is not one the model was trained for;
++- `no_recent_price`: the mandi has no quote in the 7 days before `as_of`;
++- `as_of_outside_history`: `as_of` is later than the model's data plus 7 days (it would forecast from stale prices);
++- `no_skill`: in the walk-forward backtest the model did not beat "the price stays where it is" for this crop, state
++  and horizon, or had too few test samples to say.
++The backtest row is returned in every case, so a caller can show how the model has done.
++"""
++
++from __future__ import annotations
++
++import json
++from functools import lru_cache
++from pathlib import Path
++from typing import Dict, List, Optional
++
++import joblib
++import numpy as np
++import pandas as pd
++
++from src.forecast.series import ASOF_TOLERANCE_DAYS, Series, features_as_of
++from src.forecast.train import _categorical, predict_quantiles
++
++
++class ForecastUnavailable(Exception):
++    """No trained forecast bundle is present."""
++
++
++def _latest(models_dir: Path) -> Path:
++    found = sorted(p for p in models_dir.glob("forecast_*.json"))
++    if not found:
++        raise ForecastUnavailable(f"No trained forecast in {models_dir}. Run: python -m src.forecast.train")
++    return found[-1]
++
++
++@lru_cache(maxsize=1)
++def load_bundle(models_dir: str) -> Dict:
++    meta_path = _latest(Path(models_dir))
++    meta = json.loads(meta_path.read_text())
++    bundle = joblib.load(Path(models_dir) / meta["model_file"])
++    history = pd.read_csv(Path(models_dir) / meta["history_file"], parse_dates=["date"])
++    return {"meta": meta, "bundle": bundle, "history": history}
++
++
++def _norm(v: Optional[str]) -> str:
++    return str(v or "").strip()
++
++
++def _backtest_row(meta: Dict, commodity: str, state: str, horizon: int) -> Optional[Dict]:
++    for g in meta["backtest"]["groups"]:
++        if g["commodity"] == commodity and g["state"] == state and g["horizon_days"] == horizon:
++            return g
++    return None
++
++
++def forecast(req: Dict, models_dir: str) -> Dict:
++    """`req`: commodity, state, market, as_of (YYYY-MM-DD), horizon_days, optional history [{date, modal_price}]."""
++    loaded = load_bundle(models_dir)
++    meta, bundle = loaded["meta"], loaded["bundle"]
++    commodity, state, market = _norm(req.get("commodity")), _norm(req.get("state")), _norm(req.get("market"))
++    horizon = int(req.get("horizon_days") or 0)
++    as_of = np.datetime64(pd.Timestamp(req.get("as_of")).normalize().date(), "D")
++    target = as_of + np.timedelta64(horizon, "D")
++    base = {
++        "commodity": commodity, "state": state, "market": market, "as_of": str(as_of), "horizon_days": horizon,
++        "target_date": str(target), "unit": "INR per quintal (modal price)",
++        "model": {"file": meta["model_file"], "trained_at": meta["trained_at"], "trained_through": meta["trained_through"],
++                  "data_source": meta["data_source"], "data_hash": meta["data_hash"]},
++        "backtest": _backtest_row(meta, commodity, state, horizon),
++    }
++
++    def abstain(code: str, why: str) -> Dict:
++        return {**base, "abstain": True, "reason_code": code, "reason": why, "p10": None, "p50": None, "p90": None}
++
++    if commodity not in meta["commodities"] or state not in meta["states"] \
++            or market not in meta["markets"].get(f"{commodity}|{state}", []):
++        return abstain("not_trained_for", "This crop, state and mandi are not in what the model was trained on.")
++    if horizon not in meta["horizons_days"]:
++        return abstain("horizon_not_trained", f"Horizons trained: {meta['horizons_days']} days.")
++    if target <= np.datetime64(meta["trained_through"], "D"):
++        # The served models were fitted on every sample up to `trained_through`, so this day's outcome is in their
++        # training data. A range here would describe a known price, and it would look far better than a forecast.
++        return abstain("in_sample", f"This day's outcome ({target}) is inside the model's training data (to "
++                                    f"{meta['trained_through']}), so a range here would not be a forecast.")
++    latest = np.datetime64(meta["trained_through"], "D") + np.timedelta64(ASOF_TOLERANCE_DAYS, "D")
++    if as_of > latest and not req.get("history"):
++        return abstain("as_of_outside_history", f"The model's prices end on {meta['trained_through']}; send `history` "
++                                                "to forecast from a later day.")
++    bt = base["backtest"]
++    if not bt or not bt.get("usable"):
++        return abstain("no_skill", "In its backtest the model did not beat 'the price stays where it is' for this crop, "
++                                   "state and horizon, or its range held too few of the real outcomes (under 70%), or "
++                                   "there were too few test cases to say.")
++
++    if req.get("history"):
++        h = pd.DataFrame(req["history"])
++        h["date"] = pd.to_datetime(h["date"]).dt.normalize()
++        g = h[["date", "modal_price"]]
++    else:
++        hist = loaded["history"]
++        g = hist[(hist["commodity"] == commodity) & (hist["state"] == state) & (hist["market"] == market)]
++    g = g[g["date"] <= pd.Timestamp(as_of)]
++    if g.empty:
++        return abstain("no_recent_price", "No price for this mandi on or before that day.")
++    row = features_as_of((commodity, state, market), Series.from_frame(g), as_of, horizon)
++    if row is None:
++        return abstain("no_recent_price", f"The mandi has no quote in the {ASOF_TOLERANCE_DAYS} days before {as_of}.")
++    X = _categorical(pd.DataFrame([row]), bundle["categories"])
++    qhat = float((meta.get("range_widening") or {}).get(str(horizon), {}).get("qhat", 0.0))
++    raw = predict_quantiles(bundle["models"], X)[0]
++    p10, p50, p90 = (round(float(v), 2) for v in (raw[0] - qhat, raw[1], raw[2] + qhat))
++    return {**base, "abstain": False, "p10": p10, "p50": p50, "p90": p90,
++            "last_price": row["last_price"], "days_since_last_price": int(row["days_since_last"]),
++            "range_widened_by": qhat,
++            "what_this_is": ("A range for the modal price at this mandi around the target date: p50 is the middle "
++                             "estimate. In the backtest the outcome fell inside p10-p90 in the share of cases given as "
++                             "backtest.coverage_p10_p90. It is a model estimate, not a promise.")}
++
++
++def list_meta(models_dir: str) -> Dict:
++    meta = load_bundle(models_dir)["meta"]
++    keep = ("model_file", "trained_at", "trained_through", "backtest_cutoff", "data_source", "horizons_days",
++            "quantiles", "features", "features_never_used", "commodities", "states", "markets", "backtest",
++            "range_widening", "target_coverage_p10_p90")
++    return {k: meta[k] for k in keep}
++
++
++def reset_cache() -> None:
++    load_bundle.cache_clear()
++
++
++def usable_groups(models_dir: str) -> List[Dict]:
++    return [g for g in load_bundle(models_dir)["meta"]["backtest"]["groups"] if g.get("usable")]
+diff --git a/src/forecast/train.py b/src/forecast/train.py
+new file mode 100644
+index 0000000..6289f6b
+--- /dev/null
++++ b/src/forecast/train.py
+@@ -0,0 +1,240 @@
++"""Train the forecast: three quantile models (p10, p50, p90), checked walk-forward against the naive rule.
++
++    python -m src.forecast.train --horizons 7 14 30 [--source "Agmarknet via data.gov.in (CEDA)"]
++        [--input rows.csv[.gz]] [--crops Onion Wheat] [--holdout-days 90] [--step-days 7] [--seed 42]
++        [--models-dir models]
++
++    # the configuration of the official backtest AIAIC measured (2026-09-28); it reproduces that table:
++    python -m src.forecast.train --input agmarknet_mh_mp_2016_2026.csv.gz --crops Onion Soyabean Wheat \
++        --horizons 7 30 --holdout-days 180 --step-days 7 --seed 42 --models-dir models/forecast_official \
++        --source "Agmarknet via data.gov.in (Variety-wise Daily Market Prices), AIAIC export 2016-2026"
++
++Reads the PREPROCESSED dataset (the output of `run_pipeline.py --stage preprocess`, or any frame with commodity,
++state, market, date, modal_price). Writes, in `models/` (or `--models-dir`):
++    forecast_<UTC time>_<data hash>.joblib         the three models and the category lists
++    forecast_<UTC time>_<data hash>.json           metadata: horizons, dates, closed lists, the backtest
++    forecast_<UTC time>_<data hash>_history.csv.gz the last 400 days per mandi, so the service can answer alone
++
++THE BACKTEST IS WALK-FORWARD. Models are fitted on samples whose TARGET date is on or before the cutoff, and scored
++on samples ASKED after it, so no price from the scoring period is ever seen in training. The number that matters is
++`skill_vs_persistence` = 1 - MAE(p50) / MAE("the price stays where it is"). Above 0 means the model helped; at or
++below 0 the service ABSTAINS for that crop, state and horizon.
++
++THE RANGE IS CALIBRATED (split conformal: "conformalized quantile regression", Romano, Patterson and Candes, 2019).
++Raw quantile models are usually too narrow (on the synthetic test data, p10-p90 held 64% of outcomes, not 80%). The
++scoring period is split in time: its first half CALIBRATES a widening `qhat` per horizon (the finite-sample 80%
++quantile of max(p10 - y, y - p90)), and the second half, untouched, is where every reported number comes from.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import logging
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Dict, List, Optional
++
++import joblib
++import lightgbm as lgb
++import numpy as np
++import pandas as pd
++
++from src.forecast.series import CATEGORICAL_FEATURES, FEATURES, daily_series, training_samples
++
++logger = logging.getLogger(__name__)
++
++QUANTILES = (0.1, 0.5, 0.9)
++TARGET_COVERAGE = 0.8          # p10..p90
++MIN_CALIBRATION = 20           # below this, a horizon's range is not widened, and the metadata says so
++HOLDOUT_DAYS = 90
++MIN_GROUP_TEST_SAMPLES = 20
++#: A range that held fewer outcomes than this in the scored period is not shown, whatever its p50 did. Measured on the
++#: official data (2026-09-28): Maharashtra onion at 30 days beat persistence slightly, but its "80%" range held 52%.
++MIN_COVERAGE = 0.7
++HISTORY_DAYS = 400
++
++
++def _categorical(frame: pd.DataFrame, categories: Dict[str, List[str]]) -> pd.DataFrame:
++    """The same category lists at training and at inference, so a code means the same mandi in both."""
++    X = frame[FEATURES].copy()
++    for c in CATEGORICAL_FEATURES:
++        X[c] = pd.Categorical(X[c].astype(str), categories=categories[c])
++    for c in FEATURES:
++        if c not in CATEGORICAL_FEATURES:
++            X[c] = pd.to_numeric(X[c], errors="coerce").astype(float)
++    return X
++
++
++def _fit(X: pd.DataFrame, y: pd.Series, alpha: float, seed: int) -> lgb.LGBMRegressor:
++    m = lgb.LGBMRegressor(objective="quantile", alpha=alpha, n_estimators=400, learning_rate=0.05, num_leaves=31,
++                          min_child_samples=20, random_state=seed, verbose=-1)
++    m.fit(X, y, categorical_feature=CATEGORICAL_FEATURES)
++    return m
++
++
++def predict_quantiles(models: Dict[float, lgb.LGBMRegressor], X: pd.DataFrame) -> np.ndarray:
++    """(n, 3) array of p10, p50, p90, sorted per row so the range never crosses itself."""
++    raw = np.column_stack([models[q].predict(X) for q in QUANTILES])
++    return np.sort(raw, axis=1)
++
++
++def conformal_widening(cal: pd.DataFrame, q: np.ndarray) -> Dict[int, Dict]:
++    """Per horizon: the amount `qhat` to widen p10..p90 by so that about TARGET_COVERAGE of outcomes fall inside
++    (split-conformal, finite-sample quantile). Horizons with fewer than MIN_CALIBRATION cases get 0 and say so."""
++    y = cal["target"].to_numpy()
++    scores = np.maximum(q[:, 0] - y, y - q[:, 2])
++    out = {}
++    for h in sorted(cal["horizon_days"].unique()):
++        s = np.sort(scores[cal["horizon_days"].to_numpy() == h])
++        n = len(s)
++        if n < MIN_CALIBRATION:
++            out[int(h)] = {"qhat": 0.0, "n_calibration": n, "note": "too few calibration cases; range NOT widened"}
++            continue
++        k = min(n - 1, int(np.ceil((n + 1) * TARGET_COVERAGE)) - 1)
++        out[int(h)] = {"qhat": round(max(0.0, float(s[k])), 2), "n_calibration": n}
++    return out
++
++
++def widen(q: np.ndarray, horizons: np.ndarray, widening: Dict[int, Dict]) -> np.ndarray:
++    """p10 - qhat, p50, p90 + qhat, per row's horizon."""
++    w = np.array([widening.get(int(h), {}).get("qhat", 0.0) for h in horizons], dtype=float)
++    return np.column_stack([q[:, 0] - w, q[:, 1], q[:, 2] + w])
++
++
++def backtest_table(test: pd.DataFrame, q: np.ndarray, raw: Optional[np.ndarray] = None) -> Dict:
++    """Overall and per (commodity, state, horizon): MAE of p50, MAE of persistence, skill, and how often the outcome
++    fell inside p10..p90 (calibrated; and before widening, when `raw` is given)."""
++    t = test.assign(p10=q[:, 0], p50=q[:, 1], p90=q[:, 2])
++    t["err_model"] = (t["p50"] - t["target"]).abs()
++    t["err_persist"] = (t["last_price"] - t["target"]).abs()
++    t["inside"] = (t["target"] >= t["p10"]) & (t["target"] <= t["p90"])
++    if raw is not None:
++        t["inside_raw"] = (t["target"] >= raw[:, 0]) & (t["target"] <= raw[:, 2])
++
++    def summarise(g: pd.DataFrame) -> Dict:
++        mae, base = float(g["err_model"].mean()), float(g["err_persist"].mean())
++        row = {"n": int(len(g)), "mae_p50": round(mae, 2), "mae_persistence": round(base, 2),
++               "skill_vs_persistence": round(1.0 - mae / base, 4) if base > 0 else None,
++               "coverage_p10_p90": round(float(g["inside"].mean()), 4)}
++        if "inside_raw" in g:
++            row["coverage_p10_p90_before_calibration"] = round(float(g["inside_raw"].mean()), 4)
++        return row
++
++    groups = []
++    for (c, s, h), g in t.groupby(["commodity", "state", "horizon_days"], observed=True):
++        row = {"commodity": c, "state": s, "horizon_days": int(h), **summarise(g)}
++        row["usable"] = bool(row["n"] >= MIN_GROUP_TEST_SAMPLES and (row["skill_vs_persistence"] or 0) > 0
++                             and row["coverage_p10_p90"] >= MIN_COVERAGE)
++        groups.append(row)
++    return {"overall": summarise(t), "groups": groups}
++
++
++def walk_forward_split(samples: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS):
++    """(train, test, cutoff). Train: samples whose TARGET date is on or before the cutoff. Test: samples ASKED after
++    it. No test-period price is ever inside a training FEATURE. A training TARGET is the nearest quote on or after its
++    target day, up to TARGET_TOLERANCE_DAYS (3) later, so it can be a quote a few days past the cutoff. It can
++    coincide with a scored target only for a horizon shorter than that tolerance, and every horizon used here is
++    longer."""
++    cutoff = samples["target_date"].max() - pd.Timedelta(days=holdout_days)
++    return samples[samples["target_date"] <= cutoff], samples[samples["as_of"] > cutoff], cutoff
++
++
++def train(df: pd.DataFrame, horizons: List[int], source: str, models_dir: Path, seed: int = 42,
++          holdout_days: int = HOLDOUT_DAYS, step_days: int = 7) -> Dict:
++    daily = daily_series(df)
++    if daily.empty:
++        raise RuntimeError("No usable rows (need commodity, state, market, date and a positive modal_price).")
++    samples = training_samples(daily, horizons, step_days=step_days)
++    if samples.empty:
++        raise RuntimeError("No training samples: every mandi has too little history for these horizons.")
++    train_s, test_s, cutoff = walk_forward_split(samples, holdout_days)
++    if len(train_s) < 200 or len(test_s) < 50:
++        raise RuntimeError(f"Too few samples for an honest backtest (train={len(train_s)}, test={len(test_s)}).")
++
++    categories = {c: sorted(daily[c].astype(str).unique().tolist()) for c in CATEGORICAL_FEATURES}
++    Xtr, ytr = _categorical(train_s, categories), train_s["target"]
++    bt_models = {q: _fit(Xtr, ytr, q, seed) for q in QUANTILES}
++    # The scoring period, split in time: the first half calibrates the range, the second half is scored untouched.
++    test_s = test_s.sort_values("as_of").reset_index(drop=True)
++    mid = test_s["as_of"].iloc[len(test_s) // 2]
++    cal = test_s[test_s["as_of"] < mid].reset_index(drop=True)
++    ev = test_s[test_s["as_of"] >= mid].reset_index(drop=True)
++    widening = conformal_widening(cal, predict_quantiles(bt_models, _categorical(cal, categories)))
++    raw_ev = predict_quantiles(bt_models, _categorical(ev, categories))
++    backtest = backtest_table(ev, widen(raw_ev, ev["horizon_days"].to_numpy(), widening), raw=raw_ev)
++    backtest["scored_from"] = str(mid.date())
++    backtest["calibrated_on"] = (f"{cal['as_of'].min().date()} to {cal['as_of'].max().date()}" if len(cal)
++                                 else "nothing")
++
++    # The served models are REFITTED on every sample, the backtest period included. The backtest above is the record
++    # of this PROCEDURE (the same features, settings and seed, fitted up to the cutoff), not of these exact fitted
++    # models. Their range is widened by the `qhat` calibrated above. A day whose outcome is inside this training data
++    # is refused by the service (`in_sample`), since a range there would describe a known price.
++    Xall = _categorical(samples, categories)
++    served = {q: _fit(Xall, samples["target"], q, seed) for q in QUANTILES}
++
++    data_hash = hashlib.sha256(pd.util.hash_pandas_object(daily, index=False).values.tobytes()).hexdigest()
++    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
++    stem = f"forecast_{stamp}_{data_hash[:8]}"
++    models_dir.mkdir(parents=True, exist_ok=True)
++    joblib.dump({"models": served, "categories": categories, "quantiles": QUANTILES}, models_dir / f"{stem}.joblib")
++
++    keep_from = daily["date"].max() - pd.Timedelta(days=HISTORY_DAYS)
++    daily[daily["date"] >= keep_from].to_csv(models_dir / f"{stem}_history.csv.gz", index=False, compression="gzip")
++
++    markets = {f"{c}|{s}": sorted(g["market"].unique().tolist())
++               for (c, s), g in daily.groupby(["commodity", "state"], observed=True)}
++    meta = {
++        "model_file": f"{stem}.joblib", "history_file": f"{stem}_history.csv.gz", "trained_at": stamp,
++        "data_hash": data_hash, "data_source": source, "horizons_days": sorted(horizons),
++        "trained_through": str(daily["date"].max().date()), "backtest_cutoff": str(cutoff.date()),
++        "holdout_days": holdout_days, "step_days": step_days, "quantiles": list(QUANTILES), "features": FEATURES,
++        "features_never_used": ["min_price", "max_price", "any price dated after as_of"],
++        "commodities": categories["commodity"], "states": categories["state"], "markets": markets,
++        "backtest": backtest, "range_widening": {str(h): v for h, v in widening.items()},
++        "target_coverage_p10_p90": TARGET_COVERAGE, "random_seed": seed,
++    }
++    (models_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2))
++    logger.info("Forecast trained: %s | overall %s", stem, backtest["overall"])
++    return meta
++
++
++def main(argv: Optional[List[str]] = None) -> None:
++    ap = argparse.ArgumentParser(description="Train the AIAIC price forecast (quantiles, walk-forward).")
++    ap.add_argument("--horizons", type=int, nargs="+", default=[7, 14, 30])
++    ap.add_argument("--source", default="see data/raw (state it: e.g. 'Agmarknet via data.gov.in')")
++    ap.add_argument("--input", default=None, help="CSV of preprocessed rows (default: rerun ingest..preprocess)")
++    ap.add_argument("--crops", nargs="+", default=None, help="Train only these commodities (exact names)")
++    ap.add_argument("--holdout-days", type=int, default=HOLDOUT_DAYS, help="Days before the last target left for the backtest")
++    ap.add_argument("--step-days", type=int, default=7, help="Days between two samples of one mandi")
++    ap.add_argument("--seed", type=int, default=None, help="Default: settings.random_seed")
++    ap.add_argument("--models-dir", default=None, help="Default: settings.models_dir")
++    args = ap.parse_args(argv)
++    from src.config.settings import settings
++    if args.input:
++        df = pd.read_csv(args.input, usecols=lambda c: c in ("commodity", "state", "market", "date", "modal_price"))
++    else:
++        from src.ingestion.pipeline import ingest_raw_dataset
++        from src.preprocessing.pipeline import run_preprocessing
++        from src.validation.pipeline import validate_dataset
++        raw, m1 = ingest_raw_dataset()
++        valid, _q, m2 = validate_dataset(raw, parent_hash=m1["content_hash"])
++        df, _m3 = run_preprocessing(valid, parent_hash=m2["content_hash"])
++    if args.crops:
++        unknown = sorted(set(args.crops) - set(df["commodity"].astype(str).unique()))
++        if unknown:
++            raise SystemExit(f"--crops: not in the data: {unknown}. Names are exact, as the data spells them.")
++        df = df[df["commodity"].isin(args.crops)]
++    seed = settings.random_seed if args.seed is None else args.seed
++    models_dir = Path(args.models_dir) if args.models_dir else settings.models_dir
++    meta = train(df, args.horizons, args.source, models_dir, seed=seed, holdout_days=args.holdout_days,
++                 step_days=args.step_days)
++    print(json.dumps({k: meta[k] for k in ("model_file", "trained_through", "backtest_cutoff")}, indent=1))
++    print(json.dumps(meta["backtest"]["overall"], indent=1))
++
++
++if __name__ == "__main__":
++    logging.basicConfig(level="INFO", format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
++    main()
+diff --git a/tests/forecast/__init__.py b/tests/forecast/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/forecast/conftest.py b/tests/forecast/conftest.py
+new file mode 100644
+index 0000000..2035c54
+--- /dev/null
++++ b/tests/forecast/conftest.py
+@@ -0,0 +1,37 @@
++"""SYNTHETIC price data for the forecast tests. It is NOT market data and must never be shown as such: a seasonal
++curve, a slow trend, noise, and gaps where a mandi did not report, for two crops at three mandis each."""
++
++import numpy as np
++import pandas as pd
++import pytest
++
++
++def synthetic_prices(days: int = 730, seed: int = 7) -> pd.DataFrame:
++    rng = np.random.default_rng(seed)
++    dates = pd.date_range("2023-01-01", periods=days, freq="D")
++    rows = []
++    for commodity, level in (("Onion", 1800.0), ("Wheat", 2400.0)):
++        for market, offset in (("Lasalgaon", 0.0), ("Pimpalgaon", 60.0), ("Nashik", -40.0)):
++            season = 1.0 + 0.25 * np.sin(2 * np.pi * (dates.dayofyear.values - 80) / 365.0)
++            trend = 1.0 + 0.10 * np.arange(days) / days
++            price = (level + offset) * season * trend * (1.0 + rng.normal(0, 0.03, days))
++            reported = rng.random(days) > 0.2          # about one day in five has no quote
++            for d, p, ok in zip(dates, price, reported):
++                if ok:
++                    rows.append({"commodity": commodity, "state": "Maharashtra", "district": "Nashik",
++                                 "market": market, "date": d, "min_price": p * 0.8, "max_price": p * 1.2,
++                                 "modal_price": round(float(p), 2)})
++    return pd.DataFrame(rows)
++
++
++@pytest.fixture(scope="session")
++def synthetic() -> pd.DataFrame:
++    return synthetic_prices()
++
++
++@pytest.fixture(scope="session")
++def trained(tmp_path_factory, synthetic):
++    from src.forecast.train import train
++    models = tmp_path_factory.mktemp("forecast_models")
++    meta = train(synthetic, [7, 30], "SYNTHETIC test data (not market data)", models, holdout_days=90, step_days=5)
++    return models, meta
+diff --git a/tests/forecast/test_forecast_answers_or_says_why_not.py b/tests/forecast/test_forecast_answers_or_says_why_not.py
+new file mode 100644
+index 0000000..541dbc0
+--- /dev/null
++++ b/tests/forecast/test_forecast_answers_or_says_why_not.py
+@@ -0,0 +1,101 @@
++"""`/v1/forecast`: a range (p10 <= p50 <= p90) with its backtest, or an abstention with a reason; never a guess.
++Trained on SYNTHETIC data (tests/forecast/conftest.py); no figure here describes a real market."""
++
++import json
++
++from fastapi.testclient import TestClient
++
++from src.forecast import service
++
++
++def _client(monkeypatch, models_dir):
++    from src.api.main import app
++    from src.config.settings import settings
++    monkeypatch.setattr(settings, "models_dir", models_dir)
++    service.reset_cache()
++    return TestClient(app)
++
++
++def test_the_backtest_is_against_the_naive_rule_and_recorded(trained):
++    _models, meta = trained
++    o = meta["backtest"]["overall"]
++    assert {"mae_p50", "mae_persistence", "skill_vs_persistence", "coverage_p10_p90", "n"} <= set(o)
++    assert meta["features_never_used"][0] == "min_price"
++    assert meta["data_source"].startswith("SYNTHETIC")
++
++
++def test_a_usable_group_gets_an_ordered_range(monkeypatch, trained):
++    models, meta = trained
++    usable = [g for g in meta["backtest"]["groups"] if g["usable"]]
++    c = _client(monkeypatch, models)
++    for g in usable[:2]:
++        market = meta["markets"][f"{g['commodity']}|{g['state']}"][0]
++        r = c.post("/v1/forecast", json={"commodity": g["commodity"], "state": g["state"], "market": market,
++                                         "as_of": meta["trained_through"], "horizon_days": g["horizon_days"]}).json()
++        assert r["abstain"] is False, r
++        assert r["p10"] <= r["p50"] <= r["p90"]
++        assert r["backtest"]["skill_vs_persistence"] > 0
++
++
++def test_a_group_without_skill_abstains_and_still_shows_its_record(monkeypatch, trained):
++    models, meta = trained
++    meta_path = models / meta["model_file"].replace(".joblib", ".json")
++    saved = meta_path.read_text()
++    try:
++        m = json.loads(saved)
++        for g in m["backtest"]["groups"]:
++            g["usable"] = False
++        meta_path.write_text(json.dumps(m))
++        c = _client(monkeypatch, models)
++        g = m["backtest"]["groups"][0]
++        r = c.post("/v1/forecast", json={"commodity": g["commodity"], "state": g["state"],
++                                         "market": m["markets"][f"{g['commodity']}|{g['state']}"][0],
++                                         "as_of": m["trained_through"], "horizon_days": g["horizon_days"]}).json()
++        assert r["abstain"] is True and r["reason_code"] == "no_skill" and r["p50"] is None
++        assert r["backtest"]["n"] == g["n"]
++    finally:
++        meta_path.write_text(saved)
++        service.reset_cache()
++
++
++def test_an_unknown_crop_mandi_or_horizon_is_refused_not_guessed(monkeypatch, trained):
++    models, meta = trained
++    c = _client(monkeypatch, models)
++    ask = {"commodity": "Onion", "state": "Maharashtra", "market": "Lasalgaon", "as_of": meta["trained_through"],
++           "horizon_days": 7}
++    for change, code in (({"commodity": "Saffron"}, "not_trained_for"), ({"market": "Nowhere APMC"}, "not_trained_for"),
++                         ({"horizon_days": 11}, "horizon_not_trained"), ({"as_of": "2031-01-01"}, "as_of_outside_history")):
++        r = c.post("/v1/forecast", json={**ask, **change}).json()
++        assert r["abstain"] is True and r["reason_code"] == code, (change, r)
++
++
++def test_a_day_inside_the_training_data_is_refused_as_in_sample(monkeypatch, trained):
++    """The served models were fitted on every sample up to `trained_through`, so a range for a day whose outcome is in
++    that data would describe a known price and would look far better than a forecast."""
++    import pandas as pd
++    models, meta = trained
++    early = (pd.Timestamp(meta["trained_through"]) - pd.Timedelta(days=30)).date().isoformat()
++    r = _client(monkeypatch, models).post("/v1/forecast", json={
++        "commodity": "Onion", "state": "Maharashtra", "market": "Lasalgaon", "as_of": early, "horizon_days": 7}).json()
++    assert r["abstain"] is True and r["reason_code"] == "in_sample" and r["p50"] is None, r
++
++
++def test_the_cli_refuses_a_crop_that_is_not_in_the_data(tmp_path, synthetic):
++    """`--crops` names are exact, as the data spells them (Agmarknet writes "Soyabean"); a typo is refused, not
++    silently trained on nothing."""
++    import pytest
++
++    from src.forecast.train import main
++    csv = tmp_path / "synthetic.csv"
++    synthetic.to_csv(csv, index=False)
++    with pytest.raises(SystemExit) as e:
++        main(["--input", str(csv), "--crops", "Saffron", "--models-dir", str(tmp_path / "m")])
++    assert "not in the data" in str(e.value)
++
++
++def test_meta_says_what_the_model_is_and_is_not(monkeypatch, trained):
++    models, _meta = trained
++    m = _client(monkeypatch, models).get("/v1/forecast/meta").json()
++    assert m["horizons_days"] == [7, 30] and "min_price" in m["features_never_used"]
++    assert m["markets"]["Onion|Maharashtra"] == ["Lasalgaon", "Nashik", "Pimpalgaon"]   # AIAIC offers these mandis
++    assert set(m["range_widening"]) == {"7", "30"}
+diff --git a/tests/forecast/test_forecast_has_no_leakage.py b/tests/forecast/test_forecast_has_no_leakage.py
+new file mode 100644
+index 0000000..bcfb655
+--- /dev/null
++++ b/tests/forecast/test_forecast_has_no_leakage.py
+@@ -0,0 +1,53 @@
++"""The forecast can only see what was known on the day it is asked (the defects this package exists to remove).
++
++`/v1/predict` reads the same day's min and max price, and its "lags" shift ROWS across every mandi in a state, so
++its R² of 0.99 describes a day already known. These tests fail if either comes back into the forecast.
++"""
++
++import numpy as np
++import pandas as pd
++
++from src.forecast.series import FEATURES, Series, daily_series, features_as_of, training_samples
++from src.forecast.train import walk_forward_split
++
++
++def test_no_same_day_range_or_future_column_is_a_feature():
++    for banned in ("min_price", "max_price", "modal_price", "target", "target_date"):
++        assert banned not in FEATURES
++
++
++def test_a_feature_does_not_change_when_every_later_price_changes(synthetic):
++    daily = daily_series(synthetic)
++    g = daily[(daily.commodity == "Onion") & (daily.market == "Lasalgaon")]
++    as_of = np.datetime64("2024-03-15", "D")
++    before = features_as_of(("Onion", "Maharashtra", "Lasalgaon"), Series.from_frame(g), as_of, 30)
++    future = g.copy()
++    future.loc[future["date"] > pd.Timestamp(as_of), "modal_price"] *= 50      # the future changes completely
++    after = features_as_of(("Onion", "Maharashtra", "Lasalgaon"), Series.from_frame(future), as_of, 30)
++    assert before == after
++
++
++def test_a_lag_is_the_same_mandi_a_week_earlier_never_another_mandi_that_day():
++    rows = []
++    for d in pd.date_range("2024-01-01", "2024-02-29"):
++        rows.append({"commodity": "Onion", "state": "Maharashtra", "market": "A", "date": d, "modal_price": 1000.0 + d.day})
++        rows.append({"commodity": "Onion", "state": "Maharashtra", "market": "B", "date": d, "modal_price": 5000.0})
++    daily = daily_series(pd.DataFrame(rows))
++    a = daily[daily.market == "A"]
++    f = features_as_of(("Onion", "Maharashtra", "A"), Series.from_frame(a), np.datetime64("2024-02-20", "D"), 7)
++    assert f["last_price"] == 1020.0
++    assert f["price_lag_7"] == 1013.0          # A on 13 February, not B (5000) on any day
++
++
++def test_several_varieties_on_one_day_are_one_price_not_a_lag():
++    rows = [{"commodity": "Onion", "state": "Maharashtra", "market": "A", "date": "2024-01-10", "modal_price": p}
++            for p in (1000.0, 1200.0, 1400.0)]
++    daily = daily_series(pd.DataFrame(rows))
++    assert len(daily) == 1 and daily["modal_price"].iloc[0] == 1200.0
++
++
++def test_no_scored_target_or_its_prices_reach_training(synthetic):
++    samples = training_samples(daily_series(synthetic), [7, 30], step_days=5)
++    train_s, test_s, cutoff = walk_forward_split(samples, holdout_days=90)
++    assert len(train_s) and len(test_s)
++    assert train_s["target_date"].max() <= cutoff < test_s["as_of"].min()

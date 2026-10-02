@@ -1,0 +1,15 @@
+PROJECT TEST SUITE RERUN
+Date: 2026-10-02
+Command: .venv\Scripts\python.exe -m pytest <repo>\tests -q
+Result: 86 passed, 8 warnings in 22.51s
+Exit code: 0
+
+Warnings:
+- Starlette multipart import is pending deprecation; use python_multipart.
+- Starlette TestClient uses the deprecated anyio BlockingPortal alias.
+- Pydantic class-based Config is deprecated.
+- Pydantic warns that model_file, model_version, and model_loaded conflict with the protected model_ namespace.
+- joblib could not detect physical core count because the Windows lookup executable is unavailable; it falls back to logical cores.
+- pandas warns that it could not infer the date format in the malformed-date quarantine test and falls back to dateutil.
+
+All 86 tests under the repository tests directory passed. The earlier root-level `pytest -q` invocation was not the accepted test result: it attempted to collect three archived UTF-16 test_results*.txt evidence files outside tests and failed collection. The reusable suite runner was updated to target `pytest tests -q`.

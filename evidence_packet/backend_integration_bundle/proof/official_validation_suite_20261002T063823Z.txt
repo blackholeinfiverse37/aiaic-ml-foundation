@@ -1,0 +1,139 @@
+OFFICIAL VALIDATION SUITE | UTC 20261002T063823Z
+REPOSITORY: C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation
+PYTHON: C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\Scripts\python.exe
+
+=== BACKEND HEALTH AND CATALOG ===
+BASE_URL: https://disarm-scrubbed-pushiness.ngrok-free.dev
+HEALTH: HTTP 200; content-type=application/json; api_response=True; body={"status":"ok","service_version":"1.0.0","engine_version":"0.1.0","registry_version":"1.0.0","adapter_framework_version":"1.0.0","runtime_version":"1.0.0","intelligence_version":"1.2.0","calibrated":false,"honesty_note":"Engine runs on UNCALIBRATED illustrative defaults (it warns in every output). Real evidence is Agmarknet daily mandi prices (GODL-India); decisions demonstrate engine operation on real data and are NOT farmer-ready advice. No metrics are fabricated; the engine abstains when data
+CATALOG: HTTP 200; content-type=application/json; api_response=True; body={"services":["crop","market","storage","water","weather"],"crops":["almond(badam)","amla(nelli kai)","apple","arecanut(betelnut/supari)","bajra","banana","banana - green","beans","beetroot","bengal gram dal(chana dal)","bitter gourd","black gram dal(urd dal)","black gram(urd beans)(whole)","black pepper","bottle gourd","brinjal","cabbage","cardamom","carrot","cashewnuts","castor seed","cauliflower","chikoos(sapota)","chili red","chilli","chilly capsicum","cinamon(dalchini)","coconut","coriander(
+BACKEND_STATUS: PASS
+ELAPSED_SECONDS: 0.84
+
+=== OFFICIAL DATA TRAINING ===
+COMMAND: C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\Scripts\python.exe -m src.forecast.train --input data/raw/agmarknet_mh_mp_2016_2026.csv.gz --crops Onion Soyabean Wheat --horizons 7 30 --holdout-days 180 --step-days 7 --seed 42 --models-dir models/forecast_official --source "Agmarknet via data.gov.in (Variety-wise Daily Market Prices), AIAIC export 2016-2026"
+STDOUT:
+{
+ "model_file": "forecast_20261002T064450Z_9595e12e.joblib",
+ "trained_through": "2026-08-26",
+ "backtest_cutoff": "2026-02-27"
+}
+{
+ "n": 15872,
+ "mae_p50": 307.51,
+ "mae_persistence": 265.72,
+ "skill_vs_persistence": -0.1573,
+ "coverage_p10_p90": 0.8151,
+ "coverage_p10_p90_before_calibration": 0.7043
+}
+STDERR:
+C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\joblib\externals\loky\backend\context.py:136: UserWarning: Could not find the number of physical cores for the following reason:
+[WinError 2] The system cannot find the file specified
+Returning the number of logical cores instead. You can silence this warning by setting LOKY_MAX_CPU_COUNT to the number of cores you want to use.
+  warnings.warn(
+  File "C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\joblib\externals\loky\backend\context.py", line 257, in _count_physical_cores
+    cpu_info = subprocess.run(
+  File "C:\Users\Tushar\AppData\Local\Programs\Python\Python310\lib\subprocess.py", line 503, in run
+    with Popen(*popenargs, **kwargs) as process:
+  File "C:\Users\Tushar\AppData\Local\Programs\Python\Python310\lib\subprocess.py", line 971, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "C:\Users\Tushar\AppData\Local\Programs\Python\Python310\lib\subprocess.py", line 1456, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+2026-10-02 12:14:53,692 | INFO | __main__ | Forecast trained: forecast_20261002T064450Z_9595e12e | overall {'n': 15872, 'mae_p50': 307.51, 'mae_persistence': 265.72, 'skill_vs_persistence': -0.1573, 'coverage_p10_p90': 0.8151, 'coverage_p10_p90_before_calibration': 0.7043}
+EXIT_CODE: 0
+ELAPSED_SECONDS: 391.44
+MODEL_METADATA: models\forecast_official\forecast_20261002T064450Z_9595e12e.json
+
+=== OFFICIAL BACKTEST COMPARISON ===
+COMMAND: C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\Scripts\python.exe "C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\aryan files\compare_with_official_backtest.py" C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\models\forecast_official\forecast_20261002T064450Z_9595e12e.json
+STDOUT:
+Crop       State            Days  Cases  Skill (yours)  Skill (official)  Shown?
+Onion      Madhya Pradesh      7    765        +0.0423           +0.0423     yes
+Onion      Madhya Pradesh     30    528        +0.0787           +0.0787      no
+Onion      Maharashtra         7   1041        -0.0432           -0.0432      no
+Onion      Maharashtra        30    741        +0.0175           +0.0175      no
+Soyabean   Madhya Pradesh      7   1667        -0.3450           -0.3450      no
+Soyabean   Madhya Pradesh     30   1147        -0.3471           -0.3471      no
+Soyabean   Maharashtra         7   1223        -0.4849           -0.4849      no
+Soyabean   Maharashtra        30    896        -0.3860           -0.3860      no
+Wheat      Madhya Pradesh      7   3075        +0.0741           +0.0741     yes
+Wheat      Madhya Pradesh     30   2176        +0.3000           +0.3000     yes
+Wheat      Maharashtra         7   1504        -0.0406           -0.0406      no
+Wheat      Maharashtra        30   1109        +0.1565           +0.1565     yes
+
+AGREES with the official backtest.
+EXIT_CODE: 0
+ELAPSED_SECONDS: 0.37
+
+=== FULL PYTEST SUITE ===
+COMMAND: C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\Scripts\python.exe -m pytest -q
+STDOUT:
+
+=================================== ERRORS ====================================
+_ ERROR collecting aiaic-ml/aiaic-ml-foundation/evidence_packet/runtime_logs/test_results.txt _
+..\..\..\AppData\Local\Programs\Python\Python310\lib\pathlib.py:1135: in read_text
+    return f.read()
+..\..\..\AppData\Local\Programs\Python\Python310\lib\codecs.py:322: in decode
+    (result, consumed) = self._buffer_decode(data, self.errors, final)
+E   UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+_ ERROR collecting aiaic-ml/aiaic-ml-foundation/evidence_packet/runtime_logs/test_results_v2.txt _
+..\..\..\AppData\Local\Programs\Python\Python310\lib\pathlib.py:1135: in read_text
+    return f.read()
+..\..\..\AppData\Local\Programs\Python\Python310\lib\codecs.py:322: in decode
+    (result, consumed) = self._buffer_decode(data, self.errors, final)
+E   UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+_ ERROR collecting aiaic-ml/aiaic-ml-foundation/review_packet/runtime_logs/test_results.txt _
+..\..\..\AppData\Local\Programs\Python\Python310\lib\pathlib.py:1135: in read_text
+    return f.read()
+..\..\..\AppData\Local\Programs\Python\Python310\lib\codecs.py:322: in decode
+    (result, consumed) = self._buffer_decode(data, self.errors, final)
+E   UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+============================== warnings summary ===============================
+.venv\lib\site-packages\starlette\formparsers.py:12
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\starlette\formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+.venv\lib\site-packages\starlette\testclient.py:41
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\starlette\testclient.py:41: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    [], typing.ContextManager[anyio.abc.BlockingPortal]
+
+.venv\lib\site-packages\pydantic\_internal\_config.py:284
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\pydantic\_internal\_config.py:284: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+.venv\lib\site-packages\pydantic\_internal\_fields.py:160
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\pydantic\_internal\_fields.py:160: UserWarning: Field "model_file" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+.venv\lib\site-packages\pydantic\_internal\_fields.py:160
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\pydantic\_internal\_fields.py:160: UserWarning: Field "model_version" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+.venv\lib\site-packages\pydantic\_internal\_fields.py:160
+  C:\Users\Tushar\Downloads\aiaic-ml\aiaic-ml-foundation\.venv\lib\site-packages\pydantic\_internal\_fields.py:160: UserWarning: Field "model_loaded" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+ERROR evidence_packet\runtime_logs\test_results.txt - UnicodeDecodeError: 'ut...
+ERROR evidence_packet\runtime_logs\test_results_v2.txt - UnicodeDecodeError: ...
+ERROR review_packet\runtime_logs\test_results.txt - UnicodeDecodeError: 'utf-...
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!
+6 warnings, 3 errors in 10.76s
+EXIT_CODE: 2
+ELAPSED_SECONDS: 13.79
+
+=== SUITE SUMMARY ===
+BACKEND: PASS; elapsed=0.84s
+TRAINING: PASS; elapsed=391.44s
+COMPARISON: PASS; elapsed=0.37s
+TESTS: FAIL; elapsed=13.79s
+TOTAL_ELAPSED_SECONDS: 406.48
+TOTAL_ELAPSED_MINUTES: 6.77
+LOG_FILE: evidence_packet\runtime_logs\official_validation_suite_20261002T063823Z.txt
+SUITE_STATUS: FAIL

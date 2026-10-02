@@ -72,11 +72,15 @@ class Settings(BaseSettings):
     api_title: str = "AIAIC ML Foundation - Crop Price Prediction Service"
     api_version: str = "0.1.0"
     log_level: str = "INFO"
+    api_base: str = ""
+    aiaic_api_base: str = ""
+    vite_aqiaic_base_url: str = ""
 
     class Config:
         env_file = ".env"
         env_prefix = "AIAIC_"
         protected_namespaces = ()
+        extra = "ignore"
 
     def ensure_dirs(self) -> None:
         for d in [self.raw_data_dir, self.processed_data_dir, self.versions_dir, self.models_dir]:

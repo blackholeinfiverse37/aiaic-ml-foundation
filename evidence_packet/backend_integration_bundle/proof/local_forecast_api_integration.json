@@ -1,0 +1,52 @@
+{
+  "status": "PASS",
+  "meta_endpoint_status": 200,
+  "forecast_endpoint_status": 200,
+  "model_file_loaded": "forecast_20261002T064450Z_9595e12e.joblib",
+  "request": {
+    "commodity": "Wheat",
+    "state": "Madhya Pradesh",
+    "market": "Satna APMC",
+    "as_of": "2026-08-26",
+    "horizon_days": 30
+  },
+  "history_points_sent": 291,
+  "response": {
+    "request_id": "d0d6cfe0-bcb8-48e9-bac8-e05531eac646",
+    "execution_status": "SUCCESS",
+    "commodity": "Wheat",
+    "state": "Madhya Pradesh",
+    "market": "Satna APMC",
+    "as_of": "2026-08-26",
+    "horizon_days": 30,
+    "target_date": "2026-09-25",
+    "unit": "INR per quintal (modal price)",
+    "model": {
+      "file": "forecast_20261002T064450Z_9595e12e.joblib",
+      "trained_at": "20261002T064450Z",
+      "trained_through": "2026-08-26",
+      "data_source": "Agmarknet via data.gov.in (Variety-wise Daily Market Prices), AIAIC export 2016-2026",
+      "data_hash": "9595e12e12cda2a689998eefd07f8d2fd67eac81e30590ac716d47d5a2a14a14"
+    },
+    "backtest": {
+      "commodity": "Wheat",
+      "state": "Madhya Pradesh",
+      "horizon_days": 30,
+      "n": 2176,
+      "mae_p50": 89.72,
+      "mae_persistence": 128.17,
+      "skill_vs_persistence": 0.3,
+      "coverage_p10_p90": 0.9444,
+      "coverage_p10_p90_before_calibration": 0.6907,
+      "usable": true
+    },
+    "abstain": false,
+    "p10": 2310.75,
+    "p50": 2500.89,
+    "p90": 2700.81,
+    "last_price": 2400.0,
+    "days_since_last_price": 0,
+    "range_widened_by": 97.52,
+    "what_this_is": "A range for the modal price at this mandi around the target date: p50 is the middle estimate. In the backtest the outcome fell inside p10-p90 in the share of cases given as backtest.coverage_p10_p90. It is a model estimate, not a promise."
+  }
+}

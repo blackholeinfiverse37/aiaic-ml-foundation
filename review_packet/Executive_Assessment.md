@@ -5,13 +5,15 @@
 
 ## What Was Built
 
-A complete, production-quality ML foundation service for agricultural crop
-price prediction, built from scratch in a standalone repository ready for
-integration into the AIAIC platform.
+A prototype ML foundation for agricultural crop price prediction, built in a
+standalone repository for integration testing. The earlier `/v1/predict`
+endpoint has been retired because its same-day min/max inputs leaked information
+about the same-day modal-price target.
 
-The service predicts Indian mandi commodity prices (modal price in INR/quintal)
-using real historical price data across 5+ major crops and multiple states,
-with a LightGBM model achieving R²=0.9946 and MAPE=4.52%.
+The retired endpoint's reported R²=0.9946 and MAPE=4.52% are not valid
+forecast-quality metrics and must not be presented as accuracy claims. Use the
+future-dated `/v1/forecast` endpoint and its release backtest for forecast
+evaluation.
 
 ---
 

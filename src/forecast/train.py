@@ -9,6 +9,13 @@
         --horizons 7 30 --holdout-days 180 --step-days 7 --seed 42 --models-dir models/forecast_official \
         --source "Agmarknet via data.gov.in (Variety-wise Daily Market Prices), AIAIC export 2016-2026"
 
+    # the pilot crops on AIAIC's export of 2026-10-02, one series per MANDI across Agmarknet's Nov-2025 renames
+    # (read its MANIFEST.json first; name the file's sha256 in --source):
+    python -m src.forecast.train --input agmarknet_pilot_mh_mp_2001_2026.csv.gz --market-column mandi \
+        --commodity-column crop --crops onion soybean tur wheat --horizons 7 30 --holdout-days 180 \
+        --step-days 7 --seed 42 --models-dir models/forecast_pilot \
+        --source "Agmarknet via data.gov.in, AIAIC pilot export 2026-10-02 (sha256 <from MANIFEST.json>)"
+
 Reads the PREPROCESSED dataset (the output of `run_pipeline.py --stage preprocess`, or any frame with commodity,
 state, market, date, modal_price). Writes, in `models/` (or `--models-dir`):
     forecast_<UTC time>_<data hash>.joblib         the three models and the category lists
@@ -142,7 +149,7 @@ def walk_forward_split(samples: pd.DataFrame, holdout_days: int = HOLDOUT_DAYS):
 
 
 def train(df: pd.DataFrame, horizons: List[int], source: str, models_dir: Path, seed: int = 42,
-          holdout_days: int = HOLDOUT_DAYS, step_days: int = 7) -> Dict:
+          holdout_days: int = HOLDOUT_DAYS, step_days: int = 7, market_identity: Optional[str] = None) -> Dict:
     daily = daily_series(df)
     if daily.empty:
         raise RuntimeError("No usable rows (need commodity, state, market, date and a positive modal_price).")
@@ -186,6 +193,10 @@ def train(df: pd.DataFrame, horizons: List[int], source: str, models_dir: Path, 
 
     markets = {f"{c}|{s}": sorted(g["market"].unique().tolist())
                for (c, s), g in daily.groupby(["commodity", "state"], observed=True)}
+    # The last day each mandi quoted: a caller can tell a mandi that still reports from one that stopped (the
+    # service refuses the latter with `no_recent_price`; this says so before anyone asks).
+    last_quote = {f"{c}|{s}": {m: str(d.date()) for m, d in g.groupby("market", observed=True)["date"].max().items()}
+                  for (c, s), g in daily.groupby(["commodity", "state"], observed=True)}
     meta = {
         "model_file": f"{stem}.joblib", "history_file": f"{stem}_history.csv.gz", "trained_at": stamp,
         "data_hash": data_hash, "data_source": source, "horizons_days": sorted(horizons),
@@ -193,6 +204,8 @@ def train(df: pd.DataFrame, horizons: List[int], source: str, models_dir: Path, 
         "holdout_days": holdout_days, "step_days": step_days, "quantiles": list(QUANTILES), "features": FEATURES,
         "features_never_used": ["min_price", "max_price", "any price dated after as_of"],
         "commodities": categories["commodity"], "states": categories["state"], "markets": markets,
+        "market_last_quote": last_quote,
+        "market_identity": market_identity or "the published market name, as given (no identity applied)",
         "backtest": backtest, "range_widening": {str(h): v for h, v in widening.items()},
         "target_coverage_p10_p90": TARGET_COVERAGE, "random_seed": seed,
     }
@@ -211,10 +224,30 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--step-days", type=int, default=7, help="Days between two samples of one mandi")
     ap.add_argument("--seed", type=int, default=None, help="Default: settings.random_seed")
     ap.add_argument("--models-dir", default=None, help="Default: settings.models_dir")
+    ap.add_argument("--market-column", default="market",
+                    help="The column that names a mandi. Use 'mandi' with AIAIC's export: Agmarknet renamed about 700 "
+                         "mandis 'X' -> 'X APMC' in Nov 2025, and `mandi` keeps each one a single series.")
+    ap.add_argument("--commodity-column", default="commodity",
+                    help="The column that names a crop. Use 'crop' with AIAIC's export: Agmarknet spelled whole tur "
+                         "three ways since 2001, and `crop` keeps it one crop. --crops then takes crop keys "
+                         "(onion soybean tur wheat).")
     args = ap.parse_args(argv)
     from src.config.settings import settings
+    identity = None
     if args.input:
-        df = pd.read_csv(args.input, usecols=lambda c: c in ("commodity", "state", "market", "date", "modal_price"))
+        cols = ("commodity", "state", "market", "date", "modal_price", args.market_column, args.commodity_column)
+        df = pd.read_csv(args.input, usecols=lambda c: c in cols)
+        used = []
+        for col, as_ in ((args.market_column, "market"), (args.commodity_column, "commodity")):
+            if col == as_:
+                continue
+            if col not in df.columns:
+                raise SystemExit(f"--{as_}-column: no column '{col}' in {args.input}")
+            df[as_] = df.pop(col)
+            used.append(f"'{col}' for the {as_}")
+        if used:
+            identity = (f"the input's {' and '.join(used)} (one series per mandi and crop across Agmarknet's "
+                        "renames), not the published names")
     else:
         from src.ingestion.pipeline import ingest_raw_dataset
         from src.preprocessing.pipeline import run_preprocessing
@@ -230,7 +263,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     seed = settings.random_seed if args.seed is None else args.seed
     models_dir = Path(args.models_dir) if args.models_dir else settings.models_dir
     meta = train(df, args.horizons, args.source, models_dir, seed=seed, holdout_days=args.holdout_days,
-                 step_days=args.step_days)
+                 step_days=args.step_days, market_identity=identity)
     print(json.dumps({k: meta[k] for k in ("model_file", "trained_through", "backtest_cutoff")}, indent=1))
     print(json.dumps(meta["backtest"]["overall"], indent=1))
 

@@ -1,5 +1,5 @@
-"""`/v1/forecast`: the endpoint AIAIC calls. `/v1/predict` stays as it was (see src/forecast/__init__.py for why it
-is not used by AIAIC)."""
+"""`/v1/forecast`: the endpoint AIAIC calls. `/v1/predict` is retired and answers 410 (src/api/routes.py; see
+src/forecast/__init__.py for why it could not forecast)."""
 
 from __future__ import annotations
 

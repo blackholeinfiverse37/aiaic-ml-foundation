@@ -68,3 +68,14 @@ models/*.joblib
 # Allow pipeline report
 !data/versions/pipeline_report.json
 !data/versions/training_runs/
+# --- 2026-10-02 review: never commit data exports, copies of a handoff, bundles or tests' replay output ---
+out/
+aryan files/
+*.zip
+*.patch
+evidence_packet/replay_logs/
+evidence_packet/backend_integration_bundle/model/
+evidence_packet/backend_integration_bundle/history/
+# models/release/ is FILLED by scripts/package_forecast_release.py (or by downloading a GitHub release's assets)
+# and copied into the image; the files themselves live on the release, not in git (models/* above already ignores
+# them).

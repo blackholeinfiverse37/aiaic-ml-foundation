@@ -56,7 +56,7 @@
     "duration_sec": 43.19
   },
   "training": {
-    "model_file": "C:\\Users\\Tushar\\Downloads\\aiaic-ml\\aiaic-ml-foundation\\models\\price_predictor_20260928T091607Z_78d16a7e.joblib",
+    "model_file": "C:\\Users\\<user>\\Downloads\\aiaic-ml\\aiaic-ml-foundation\\models\\price_predictor_20260928T091607Z_78d16a7e.joblib",
     "metrics": {
       "mae": 44.0656,
       "rmse": 91.6882,

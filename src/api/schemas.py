@@ -9,7 +9,7 @@ v1 adds:
 """
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PredictionRequest(BaseModel):
@@ -50,11 +50,15 @@ class PredictionResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Describes the served FORECAST model (`/v1/forecast`). MongoDB is not part of the deployed service."""
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_loaded: bool
     model_file: Optional[str] = None
     model_version: Optional[str] = None
-    mongo_available: bool
+    trained_through: Optional[str] = None
+    data_hash: Optional[str] = None
     api_version: str
 
 

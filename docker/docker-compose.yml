@@ -1,52 +1,37 @@
-# AIAIC ML Foundation - local deployment (API + MongoDB)
+# AIAIC ML Foundation: the forecast service, run locally the way AIAIC runs it.
 #
-# Usage:
-#   docker compose -f docker/docker-compose.yml up --build
+#   python scripts/package_forecast_release.py --from models/forecast_pilot     # fills models/release/
+#   docker compose -f docker/docker-compose.yml up --build -d
+#   curl http://127.0.0.1:8040/v1/ready                                          # {"ready": true, ...}
 #
-# The service is self-contained: if MongoDB isn't reachable, the API
-# still starts and runs in a degraded-but-functional mode (dataset
-# versioning and training-run logs fall back to local JSON files —
-# see src/storage/mongo_client.py).
-
-version: "3.9"
+# Port 8040 is bound to 127.0.0.1 only. On the AIAIC VM the service has NO published port: AIAIC reaches it on the
+# shared docker network as http://aiaic-ml:8000 (ML_PRICE_API_URL), and nothing else can.
+#
+# MongoDB is optional and OFF. It only mirrors training-run logs; the service never needs it. To start it:
+#   docker compose -f docker/docker-compose.yml --profile mongo up -d
 
 services:
+  aiaic-ml:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: aiaic-ml-foundation:${AIAIC_ML_TAG:-local}
+    container_name: aiaic-ml
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8040:8000"
+    environment:
+      - AIAIC_LOG_LEVEL=INFO
+
   mongo:
+    profiles: ["mongo"]
     image: mongo:7.0
     container_name: aiaic_mongo
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  api:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: aiaic_ml_api
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      - AIAIC_MONGO_URI=mongodb://mongo:27017
-      - AIAIC_LOG_LEVEL=INFO
-    env_file:
-      - ../.env
-    depends_on:
-      mongo:
-        condition: service_healthy
-    volumes:
-      # Mount data/ and models/ from host so training runs on the host
-      # (or via `docker compose exec api python -m ...`) are visible
-      # to the API without rebuilding the image every time.
-      - ../data:/app/data
-      - ../models:/app/models
 
 volumes:
   mongo_data:

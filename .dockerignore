@@ -1,0 +1,8 @@
+# The image needs src/, requirements-serve.txt and models/release/ only. Everything else stays out of the build
+# context (it is large, and some of it is evidence, not code).
+*
+!src/
+!requirements-serve.txt
+!models/release/
+**/__pycache__
+**/*.pyc

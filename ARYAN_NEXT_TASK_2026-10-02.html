@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aryan: review of the 2026-10-02 integration, your next task, the data, and how a model reaches AIAIC</title><style>
+:root { --bg:#ffffff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --accent:#0f766e; --soft:#f0fdfa; }
+body { background:var(--bg); color:var(--ink); font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+       max-width:880px; margin:0 auto; padding:24px 16px 64px; }
+h1 { font-size:1.7rem; line-height:1.25; } h2 { margin-top:2rem; border-bottom:1px solid var(--line); padding-bottom:4px; }
+table { border-collapse:collapse; width:100%; display:block; overflow-x:auto; font-size:.93rem; }
+th, td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+th { background:var(--soft); }
+code { background:#f3f4f6; padding:1px 4px; border-radius:4px; }
+a { color:var(--accent); word-break:break-word; }
+blockquote { border-left:4px solid var(--accent); margin:0; padding:4px 12px; background:var(--soft); }
+</style></head><body><h1>Aryan: review of the 2026-10-02 integration, your next task, the data, and how a model reaches AIAIC</h1>
+<p>From: Hemanth (AIAIC backend), 2 October 2026.
+Repository reviewed: <code>blackholeinfiverse37/aiaic-ml-foundation</code>, branch <code>aiaic-forecast</code>, commit <code>efa3478</code>
+("feat: package and integrate official forecast model"), plus the <code>backend_integration_bundle</code> you sent.</p>
+<hr />
+<h2>1. In short</h2>
+<ol>
+<li><strong>The integration works.</strong> AIAIC's backend called your service with today's bundle and got labelled,
+   experimental ranges. All 9 checks of AIAIC's integration check pass. The model is reproducible: your official
+   backtest comparison agrees.</li>
+<li><strong>The model does not yet beat "the price stays where it is" overall</strong> (skill -0.157). 4 of its 12
+   crop/state/horizon groups are usable. Soybean is much worse than persistence in both states. Onion in Maharashtra
+   (the Nashik pilot) is not usable at either horizon.</li>
+<li><strong>Two data problems hit the pilot directly, and both are fixed in the new dataset:</strong></li>
+<li>Agmarknet renamed about 700 mandis from "X" to "X APMC" in November 2025, the month its portal was upgraded
+     to "Agmarknet 2.0" (Government of India press release, PIB id 2204750, as seen in search results: the page
+     could not be opened automatically, and it does not mention the renames, which are seen in the data). Your
+     model's mandi lists hold 2,646 crop-state entries; keyed on AIAIC's identity they are 1,525 (1,391 distinct
+     published names are 772 mandis). It refuses every question about an old name ("Indore" ends 2025-11-04;
+     "Indore APMC" starts 2025-11-01).</li>
+<li>Agmarknet also spelled whole tur three ways. Selected by its old name, tur stops on 2025-11-04.</li>
+<li><strong>Some files in the repository are wrong or unsafe:</strong></li>
+<li>the retired <code>/v1/predict</code> metrics are still quoted as model quality;</li>
+<li>a public tunnel address is committed;</li>
+<li>the Docker image would start with no model and still report healthy;</li>
+<li>MongoDB is published on all interfaces with no password;</li>
+<li>16 tests fail on a clean clone;</li>
+<li>about 50 MB of data and copies are committed.</li>
+</ol>
+<p>Every one has a replacement file in this folder (section 7).
+5. <strong>When a model is built, you do not send files to me, and the repositories are not connected.</strong> You publish a
+   tagged release with checksums. Kaushlendra's pipeline runs it as its own container beside AIAIC. AIAIC already
+   calls it over HTTP (section 4).</p>
+<hr />
+<h2>2. What was checked, and the evidence</h2>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Your tests on a <strong>clean clone</strong> of <code>efa3478</code></td>
+<td><strong>70 passed, 16 failed.</strong> All 16 are <code>/v1/predict</code> integration tests that need a <code>price_predictor_*.joblib</code>, which is gitignored. "86 passed" holds only on a machine that has that file.</td>
+</tr>
+<tr>
+<td>A clean-clone test run's side effects</td>
+<td>It writes <strong>21 replay files into <code>evidence_packet/replay_logs/</code></strong>: the evidence folder changes every time someone runs the tests.</td>
+</tr>
+<tr>
+<td>Your service with the bundle (<code>AIAIC_MODELS_DIR</code> = bundle files)</td>
+<td><code>/v1/forecast/meta</code> and <code>/v1/forecast</code> answer. <code>/v1/health</code> says <strong><code>degraded</code>, <code>model_loaded: false</code></strong>: it checks only the retired <code>/v1/predict</code> model.</td>
+</tr>
+<tr>
+<td>AIAIC's integration check (<code>/ml/price-model</code>, <code>/ml/price-range</code> against your service)</td>
+<td><strong>9/9 PASS.</strong> Ranges for Indore APMC: onion 7 days, wheat 7 and 30 days. An untrained crop is refused (<code>not_trained_for</code>). A crisis message gets the helpline first.</td>
+</tr>
+<tr>
+<td>The bundle's files (sha256)</td>
+<td>model <code>652ddeb0…5ee51</code>, metadata <code>2a5480b3…80a5eb5</code>, history <code>d7878738…0ebc2</code></td>
+</tr>
+</tbody>
+</table>
+<p>The current model's backtest, read from its metadata (<code>forecast_20261002T064450Z_9595e12e.json</code>). Skill =
+1 − MAE(p50) / MAE(persistence). Usable = at least 20 cases, skill above 0, and the p10-p90 range held at least 70%
+of outcomes.</p>
+<table>
+<thead>
+<tr>
+<th>Crop</th>
+<th>State</th>
+<th>Days</th>
+<th>Cases</th>
+<th>p50 error (Rs/q)</th>
+<th>Persistence error</th>
+<th>Skill</th>
+<th>p10-p90 held</th>
+<th>Usable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Onion</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>765</td>
+<td>306</td>
+<td>320</td>
+<td>+0.042</td>
+<td>70%</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Onion</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>528</td>
+<td>501</td>
+<td>543</td>
+<td>+0.079</td>
+<td>65%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Onion</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>1,041</td>
+<td>304</td>
+<td>292</td>
+<td>-0.043</td>
+<td>71%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Onion</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>741</td>
+<td>624</td>
+<td>635</td>
+<td>+0.018</td>
+<td>52%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Soyabean</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>1,667</td>
+<td>522</td>
+<td>388</td>
+<td>-0.345</td>
+<td>81%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Soyabean</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>1,147</td>
+<td>683</td>
+<td>507</td>
+<td>-0.347</td>
+<td>85%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Soyabean</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>1,223</td>
+<td>535</td>
+<td>360</td>
+<td>-0.485</td>
+<td>80%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Soyabean</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>896</td>
+<td>695</td>
+<td>501</td>
+<td>-0.386</td>
+<td>81%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Wheat</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>3,075</td>
+<td>69</td>
+<td>74</td>
+<td>+0.074</td>
+<td>85%</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Wheat</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>2,176</td>
+<td>90</td>
+<td>128</td>
+<td>+0.300</td>
+<td>94%</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Wheat</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>1,504</td>
+<td>85</td>
+<td>82</td>
+<td>-0.041</td>
+<td>83%</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Wheat</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>1,109</td>
+<td>123</td>
+<td>146</td>
+<td>+0.157</td>
+<td>90%</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<h3>A verification run on your code (by AIAIC; it is NOT your release)</h3>
+<p>To check the replacement files end to end, AIAIC ran your trainer with the same settings as your official run
+(2016-2026; onion, soybean, wheat; horizons 7 and 30; holdout 180; step 7; seed 42). The only change: series keyed
+on the new <code>mandi</code> and <code>crop</code> columns.</p>
+<table>
+<thead>
+<tr>
+<th>Crop</th>
+<th>State</th>
+<th>Days</th>
+<th>Your model: skill, held</th>
+<th>Keyed on mandi and crop: skill, held</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>onion</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>+0.042, 70% (usable)</td>
+<td>+0.021, 71% (usable)</td>
+</tr>
+<tr>
+<td>onion</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>+0.079, 65%</td>
+<td>+0.039, 67%</td>
+</tr>
+<tr>
+<td>onion</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>-0.043, 71%</td>
+<td>-0.002, 72%</td>
+</tr>
+<tr>
+<td>onion</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>+0.018, 52%</td>
+<td>+0.061, 55%</td>
+</tr>
+<tr>
+<td>soybean</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>-0.345, 81%</td>
+<td>-0.316, 82%</td>
+</tr>
+<tr>
+<td>soybean</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>-0.347, 85%</td>
+<td>-0.317, 82%</td>
+</tr>
+<tr>
+<td>soybean</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>-0.485, 80%</td>
+<td>-0.519, 83%</td>
+</tr>
+<tr>
+<td>soybean</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>-0.386, 81%</td>
+<td>-0.371, 78%</td>
+</tr>
+<tr>
+<td>wheat</td>
+<td>Madhya Pradesh</td>
+<td>7</td>
+<td>+0.074, 85% (usable)</td>
+<td>+0.135, 83% (usable)</td>
+</tr>
+<tr>
+<td>wheat</td>
+<td>Madhya Pradesh</td>
+<td>30</td>
+<td>+0.300, 94% (usable)</td>
+<td>+0.327, 93% (usable)</td>
+</tr>
+<tr>
+<td>wheat</td>
+<td>Maharashtra</td>
+<td>7</td>
+<td>-0.041, 83%</td>
+<td><strong>+0.053, 86% (usable)</strong></td>
+</tr>
+<tr>
+<td>wheat</td>
+<td>Maharashtra</td>
+<td>30</td>
+<td>+0.157, 90% (usable)</td>
+<td>+0.190, 90% (usable)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Overall:</strong> skill -0.157 → <strong>-0.140</strong>. Usable groups 4 → <strong>5</strong>. Crop-state mandi entries listed: 2,646 →
+  <strong>1,525</strong> (distinct: 1,391 published names → 772 mandis).
+  This is one run, so a difference of a few hundredths may be noise. <strong>The identity fix is needed for
+  correctness. It does not fix accuracy.</strong></li>
+<li><strong>Packaged and served:</strong> the run was packaged with the new <code>scripts/package_forecast_release.py</code> and built with
+  the new <code>docker/Dockerfile</code> (image 794 MB).</li>
+<li>The container reports healthy only with its model loaded, and <code>/v1/predict</code> answers 410.</li>
+<li><strong>AIAIC's check passes 9/9 against the container</strong>, now at plain "Indore".</li>
+<li>A deliberately wrong checksum made the image build fail at the verify step, as intended.</li>
+</ul>
+<h3>Why soybean fails (a hypothesis for you to test, not a finding)</h3>
+<p>Soybean's monthly median price moved like this:
+- Maharashtra: about Rs 4,000-4,300 in Oct-Dec 2025, Rs 5,129 in Feb 2026, Rs 6,600-6,800 in May-Jul 2026;
+- Madhya Pradesh: about the same.</p>
+<p>The scored period (from 2026-05-23) sits entirely in that jump. A model that predicts the price LEVEL tends to pull
+back toward history in a trending market, while "the price stays where it is" rides the trend. Tree ensembles also
+predict roughly within the range of targets they were trained on (Peter Ellis, "Extrapolation is tough for trees!",
+2016, https://freerangestats.info/blog/2016/12/10/extrapolation). Predicting the
+CHANGE from the last price (for example <code>log(target / last_price)</code>, turned back into a level afterwards) anchors the
+model to persistence. That is the first experiment in section 5.</p>
+<hr />
+<h2>3. What is wrong in the repository, and the fix</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Severity</th>
+<th>What</th>
+<th>Where</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td>High</td>
+<td><code>/v1/predict</code> reads the SAME day's min and max price to predict that day's modal price. Its R² 0.9946, MAPE 4.52% and "10x better than baseline" measure that leak, not forecasting. The model metadata confirms <code>min_price</code> and <code>max_price</code> in its features.</td>
+<td><code>models/price_predictor_20260928T091607Z_78d16a7e.json</code>; quoted in <code>README.md</code>, <code>DEP.md:77</code>, <code>review_packet/REVIEW_PACKET.md:17-18,51-53</code>, <code>review_packet/Executive_Assessment.md:14,33</code>, <code>review_packet/architecture_summary.md:111-116</code></td>
+<td>Retire it: <code>/v1/predict</code> answers 410 Gone and points to <code>/v1/forecast</code> (new <code>src/api/routes.py</code>). New <code>README.md</code> and <code>DEP.md</code>. <strong>Correct the review-packet lines yourself:</strong> it is your assessment.</td>
+</tr>
+<tr>
+<td>A2</td>
+<td>High</td>
+<td>A public tunnel address (the ngrok tunnel to Hemanth's laptop) is committed in a public repository.</td>
+<td><code>.env.example</code>, <code>scripts/check_aiaic_ngrok.py</code>, <code>backend_checks.ipynb</code>, two copies of <code>official_validation_suite_20261002T063823Z.txt</code></td>
+<td>New <code>.env.example</code> with no address. New <code>scripts/check_aiaic_backend.py</code>, which takes the address when you run it. Delete the notebook (it also carries a personal local path) and the ngrok script. The patch redacts the address in the two logs, and a Windows user name in three files' paths. <code>git apply --index</code> stages the deletions; the final <code>git grep</code> in <code>CLEANUP_COMMANDS.md</code> proves nothing is left (rehearsed on a copy of <code>efa3478</code>).</td>
+</tr>
+<tr>
+<td>A3</td>
+<td>High</td>
+<td>A CI-built image has <strong>no model</strong>: <code>COPY models/</code> copies only JSON (the joblib files are gitignored). The HEALTHCHECK passes on HTTP 200 even when health says <code>degraded</code>.</td>
+<td><code>docker/Dockerfile</code></td>
+<td>New Dockerfile: copies <code>models/release/</code>, <strong>fails the build</strong> unless <code>sha256sum -c SHA256SUMS</code> passes, and its HEALTHCHECK calls <code>/v1/ready</code> (503 without a model).</td>
+</tr>
+<tr>
+<td>A4</td>
+<td>High</td>
+<td>MongoDB is published on <code>27017</code> on all interfaces with <strong>no authentication</strong>. The API waits for it. <code>env_file: ../.env</code> makes <code>docker compose up</code> fail on a clean clone. Mongo is never needed to serve, and a second database beside AIAIC's is a parallel store the unified task rules out.</td>
+<td><code>docker/docker-compose.yml</code></td>
+<td>New compose: the forecast service only, bound to <code>127.0.0.1:8040</code>. Mongo is behind <code>--profile mongo</code>, on <code>127.0.0.1</code> only. No <code>env_file</code>.</td>
+</tr>
+<tr>
+<td>A5</td>
+<td>Medium</td>
+<td><code>/v1/health</code> and <code>/v1/ready</code> describe the retired predictor, so a running forecast reports <code>degraded</code>.</td>
+<td><code>src/api/routes.py</code>, <code>src/api/schemas.py</code></td>
+<td>Both describe the forecast model (file, version, trained-through date, data hash).</td>
+</tr>
+<tr>
+<td>A6</td>
+<td>Medium</td>
+<td>16 tests fail on a clean clone, and test runs write into <code>evidence_packet/</code>.</td>
+<td><code>tests/integration/</code>, <code>tests/api/</code></td>
+<td>New tests train on the existing SYNTHETIC fixture in a temporary folder. Nothing is written to <code>evidence_packet/</code>. <strong>Review branch, no model present: 69 passed, 0 failed, 0 files changed in <code>evidence_packet/</code></strong> (<code>final_suite.txt</code>).</td>
+</tr>
+<tr>
+<td>A7</td>
+<td>Medium</td>
+<td>Mandi and crop identity (section 1): dead mandi names are offered, renamed series split in two, and tur breaks on 2025-11-04.</td>
+<td>the training data</td>
+<td>New export with <code>mandi</code> and <code>crop</code> columns. New trainer options <code>--market-column mandi --commodity-column crop</code>. The metadata now carries <code>market_last_quote</code> (the last day each mandi quoted) and <code>market_identity</code>.</td>
+</tr>
+<tr>
+<td>A8</td>
+<td>Medium</td>
+<td>About 50 MB of data and copies committed: <code>out/</code> (24 MB), <code>aryan files/</code> (a second 24 MB copy plus a copy of AIAIC's handoff), <code>aiaic_forecast.patch</code>, <code>evidence_packet/backend_integration_bundle_20261002.zip</code>, and the bundle's model and history.</td>
+<td>repository</td>
+<td>Commands in section 7. Model files belong on a release (section 4), data on a shared drive.</td>
+</tr>
+<tr>
+<td>A9</td>
+<td>Medium</td>
+<td><code>scripts/package_forecast_backend_bundle.py</code> is hard-wired to one model file and one date, and writes into <code>evidence_packet/</code>.</td>
+<td><code>scripts/</code></td>
+<td>Replaced by <code>scripts/package_forecast_release.py --from &lt;models dir&gt;</code>. It writes <code>models/release/</code> (the 3 files, <code>SHA256SUMS</code> with LF line endings, <code>RELEASE.json</code>) and proves the release answers.</td>
+</tr>
+<tr>
+<td>A10</td>
+<td>Low</td>
+<td><code>README.md</code> is UTF-16, which shows as binary in diffs and in several tools.</td>
+<td><code>README.md</code></td>
+<td>New UTF-8 README.</td>
+</tr>
+<tr>
+<td>A11</td>
+<td>Low</td>
+<td><code>evidence_packet/review_packet.md</code> is <strong>empty</strong>. Your task makes the evidence packet mandatory ("Missing Evidence Packet will result in Revision Required").</td>
+<td><code>evidence_packet/</code></td>
+<td>Write it (section 5, step D).</td>
+</tr>
+<tr>
+<td>A12</td>
+<td>Low</td>
+<td>Forecast calls are not recorded for replay. Test 1's replay covered only <code>/v1/predict</code>.</td>
+<td><code>src/forecast/</code></td>
+<td>Section 5, step E.</td>
+</tr>
+<tr>
+<td>A13</td>
+<td>Low</td>
+<td>The image installs everything in <code>requirements.txt</code> (xgboost, pymongo, pytest…).</td>
+<td><code>docker/Dockerfile</code></td>
+<td>New <code>requirements-serve.txt</code> with only what serving needs, at the same pins (a joblib model must load with the versions that wrote it).</td>
+</tr>
+<tr>
+<td>A14</td>
+<td>Low</td>
+<td>The 503 answer without a model names the server's absolute models path.</td>
+<td><code>src/forecast/service.py</code></td>
+<td>Says "No trained forecast is loaded" and how to train, without the path.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>4. How a model reaches AIAIC (the decision)</h2>
+<p><strong>Decision: your forecast runs as its own container on the AIAIC VM, and AIAIC calls it over HTTP.</strong> You do not
+send model files to Hemanth. Neither repository imports the other.</p>
+<pre><code>your repo ── tag forecast-vYYYY.MM.DD ──&gt; GitHub release assets:
+             forecast_*.joblib, forecast_*.json, forecast_*_history.csv.gz, SHA256SUMS, RELEASE.json
+                     │
+                     ▼  (Kaushlendra's pipeline: download assets, sha256sum -c, pytest, docker build, push)
+             image  bhiv/aiaic-ml:&lt;tag&gt;   (pinned tag, never &quot;latest&quot;)
+                     │
+                     ▼  (VM: docker compose, same network as AIAIC, NO published port)
+             service aiaic-ml:8000  &lt;── AIAIC  ML_PRICE_API_URL=http://aiaic-ml:8000
+                                            GET /ml/price-model   -&gt; your /v1/forecast/meta
+                                            POST /ml/price-range  -&gt; your /v1/forecast
+                                            (dashboard &quot;Price model&quot; page, labelled experimental)
+</code></pre>
+<p>Why this, and not the alternatives:</p>
+<ul>
+<li><strong>AIAIC is already built for it</strong> (AIAIC decision D-124):</li>
+<li>its <code>/ml/price-model</code> and <code>/ml/price-range</code> call your <code>/v1/forecast/meta</code> and <code>/v1/forecast</code>;</li>
+<li><strong>it re-checks your backtest rules itself</strong> (at least 20 cases, skill above 0, range held at least 70%,
+    p10 ≤ p50 ≤ p90);</li>
+<li>it labels every range "experimental; not used in decisions";</li>
+<li>it never feeds a range into a farmer's decision.</li>
+</ul>
+<p>A new model needs <strong>no AIAIC code change</strong> while the contract holds.
+- <strong>Copying model files into AIAIC</strong> would put binaries in AIAIC's git and your library pins in AIAIC's image. It
+  would also run inference inside AIAIC's single-worker server, and rolling back would mean rolling back AIAIC.
+- <strong>A repository connection</strong> (submodule or package import) has the same problems, plus dependency conflicts. It
+  would also make your capability a copy inside AIAIC, which the unified task rules out ("No parallel runtime or
+  duplicate capability").
+- <strong>It is the pattern AIAIC already runs</strong> for the plant service. Rollback is the previous tag. The checksums tie
+  image to release to dataset manifest. With no public port, nothing outside the VM can call it.</p>
+<p>Who does what:</p>
+<table>
+<thead>
+<tr>
+<th>Who</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Aryan</strong></td>
+<td>trains, packages (<code>scripts/package_forecast_release.py</code>), publishes the tagged release with honest release notes, checks the image locally, tells Hemanth and Kaushlendra the tag</td>
+</tr>
+<tr>
+<td><strong>Kaushlendra</strong></td>
+<td>pipeline that builds and pushes the image from the release, the <code>aiaic-ml</code> service in the VM's production compose, <code>ML_PRICE_API_URL</code> set to <code>http://aiaic-ml:8000</code> (the GitHub variable is already passed to AIAIC), health and rollback</td>
+</tr>
+<tr>
+<td><strong>Hemanth</strong></td>
+<td>sends datasets with manifests, runs AIAIC's integration check against each release, keeps AIAIC's own re-check of the rules</td>
+</tr>
+<tr>
+<td><strong>Owner / agronomist</strong></td>
+<td>decides if and when any forecast may go beyond the operator dashboard</td>
+</tr>
+</tbody>
+</table>
+<p><strong>MasterDB.</strong> When its details arrive, the dataset manifest (sha256) and each <code>RELEASE.json</code> become provenance
+records there. Until then they live on the release and with the dataset.</p>
+<hr />
+<h2>5. Your next task (in order), with acceptance criteria</h2>
+<p><strong>A. Make the repository clean and deployable</strong> (half a day).
+- Apply the replacement files (section 7) and remove the committed data and copies.
+- Add a small CI workflow in your repository that runs <code>pytest tests -q</code> on every push.
+- Accept when:
+  - a clean clone passes <code>pytest tests -q</code> with no model present;
+  - <code>docker compose -f docker/docker-compose.yml up --build</code> is healthy only with a model in <code>models/release/</code>;
+  - no address, key or data file is committed;
+  - <code>/v1/predict</code> answers 410.</p>
+<p><strong>B. Train the pilot model on the new dataset.</strong>
+- Use <code>--market-column mandi --commodity-column crop --crops onion soybean tur wheat</code> from 2001.
+- Name the dataset's sha256 (from its <code>MANIFEST.json</code>) in <code>--source</code>.
+- Accept when:
+  - all 16 groups (4 crops × 2 states × 7 and 30 days) are in the metadata;
+  - the release notes carry the full table, good or bad;
+  - tur answers or abstains with a reason;
+  - the table is compared with the two tables in section 2.</p>
+<p><strong>C. Experiments for skill</strong>, each on the SAME walk-forward split and cutoff, each reported as a full table:
+1. Predict the change from the last price (<code>log(target / last_price)</code>), then convert back to a level.
+2. One model per crop against the pooled model.
+3. Stronger baselines next to persistence: the same week last year scaled by the recent ratio, and the 4-week
+   mean.
+4. MSP features for soybean, tur and wheat (the distance of the last price from the season's MSP; the file is in
+   the dataset).
+5. History from 2001 against history from 2016.</p>
+<p>Rules and acceptance:
+- Do not tune on the scored half: use the calibration half or an earlier fold.
+- Adopt a change only if it improves skill on the untouched scored half.
+- Accept when there is a written experiment log with every variant's table. Soybean must either stop being worse
+  than persistence or stay abstained, never shown.</p>
+<p><strong>D. Release and evidence.</strong>
+- Package and tag the release; build and run the image; run the request in section 6 and save the response.
+- Send Hemanth and Kaushlendra the tag.
+- Fill <code>evidence_packet/review_packet.md</code> and <code>runtime_logs/</code>, and correct the review-packet lines listed in A1.
+- Accept when the release has its assets and notes, and Hemanth's integration check passes against your image.</p>
+<p><strong>E. Replay for forecasts.</strong>
+- Record every <code>/v1/forecast</code> call (request id, model file, data hash, request, response) in a runtime folder, not
+  <code>evidence_packet/</code>.
+- Add a replay runner that re-asks and compares.
+- Accept when a replay reproduces p10, p50 and p90 exactly.</p>
+<p><strong>Not in scope:</strong> any change to the AIAIC repository, a database on the VM, anything shown to farmers.</p>
+<hr />
+<h2>6. The data (sent separately: it is not committed anywhere)</h2>
+<p><strong>First, now: <code>pilot_v2/</code> (about 38 MB),</strong> exported by AIAIC on 2026-10-02 from the official Agmarknet daily
+prices (data.gov.in "Variety-wise Daily Market Prices", Government Open Data Licence - India). The numbers below
+come from its <code>MANIFEST.json</code>.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agmarknet_pilot_mh_mp_2001_2026.csv.gz</code></td>
+<td>3,563,963 rows, 2001-02-08 to 2026-08-26; onion, soybean, tur, wheat; Maharashtra and Madhya Pradesh. Every published row is kept with its source file and line (Agmarknet publishes several lots per mandi and day; none is a copy).</td>
+</tr>
+<tr>
+<td><code>mandi_identity.csv</code></td>
+<td>every (state, published market, district label) → <code>mandi</code>, <code>mandi_district</code>, and the rule used: 792 as published, 673 "X APMC" names folded, 1 name that is two mandis</td>
+</tr>
+<tr>
+<td><code>sources.csv</code></td>
+<td>the raw file behind each <code>source_file_id</code>, with its sha256</td>
+</tr>
+<tr>
+<td><code>MANIFEST.json</code></td>
+<td>counts per state and crop, the spellings folded into each crop, column meanings, limits, the sha256 of each file</td>
+</tr>
+<tr>
+<td><code>msp_pilot_crops.csv</code> + <code>MSP_MANIFEST.json</code></td>
+<td>CACP MSP by marketing season. Wheat: Rabi Marketing Seasons 2019-20 to 2026-27, complete. Soybean and tur: 2018-19 to 2023-24 and 2025-26 (<strong>2024-25 and 2026-27 missing</strong>). Onion has no MSP</td>
+</tr>
+</tbody>
+</table>
+<p>Rows per state and crop (from the manifest):</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Crop</th>
+<th>Rows</th>
+<th>First</th>
+<th>Last</th>
+<th>Published names → mandis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Madhya Pradesh</td>
+<td>onion</td>
+<td>159,345</td>
+<td>2002-02-26</td>
+<td>2026-08-26</td>
+<td>369 → 258</td>
+</tr>
+<tr>
+<td>Madhya Pradesh</td>
+<td>soybean</td>
+<td>695,271</td>
+<td>2001-03-27</td>
+<td>2026-08-26</td>
+<td>505 → 284</td>
+</tr>
+<tr>
+<td>Madhya Pradesh</td>
+<td>tur</td>
+<td>263,520</td>
+<td>2001-05-21</td>
+<td>2026-08-26</td>
+<td>395 → 253</td>
+</tr>
+<tr>
+<td>Madhya Pradesh</td>
+<td>wheat</td>
+<td>1,114,018</td>
+<td>2001-03-27</td>
+<td>2026-08-26</td>
+<td>576 → 304</td>
+</tr>
+<tr>
+<td>Maharashtra</td>
+<td>onion</td>
+<td>240,767</td>
+<td>2001-02-08</td>
+<td>2026-08-26</td>
+<td>285 → 186</td>
+</tr>
+<tr>
+<td>Maharashtra</td>
+<td>soybean</td>
+<td>353,310</td>
+<td>2001-05-26</td>
+<td>2026-08-26</td>
+<td>555 → 346</td>
+</tr>
+<tr>
+<td>Maharashtra</td>
+<td>tur</td>
+<td>320,028</td>
+<td>2001-12-30</td>
+<td>2026-08-26</td>
+<td>555 → 339</td>
+</tr>
+<tr>
+<td>Maharashtra</td>
+<td>wheat</td>
+<td>417,704</td>
+<td>2001-03-30</td>
+<td>2026-08-26</td>
+<td>565 → 350</td>
+</tr>
+</tbody>
+</table>
+<p>Read before training:
+- Key series on <code>mandi</code> and <code>crop</code>. Never sum or count rows per day: in a renaming week the same quote is
+  published under both names. Take one price per crop, mandi and day; your trainer already takes the median.
+- "Red Gram" (Madhya Pradesh 2001-2016; Maharashtra 1,199 rows 2001-2008) is <strong>not</strong> in tur. Botanically red gram
+  is tur, but at the same mandi on the same day the two names' prices are a median 0.99 apart and range 0.70 to 1.54
+  times (p10 to p90): two series reported side by side, not the identical quotes the other spellings show. It waits
+  for an agronomist's or the publisher's answer. The dals are excluded too.
+- Wheat's MSP rows are Rabi Marketing Seasons: AIAIC's older MSP source filed rabi crops by crop year (its "2023-24",
+  Rs 2,275, is RMS 2024-25). Your file is labelled by marketing season. Join an MSP to a price date by the season
+  the date falls in.
+- Coverage is thin in the early years. Prices are nominal rupees.</p>
+<p><strong>Not available yet:</strong> arrivals (tonnes traded). AIAIC holds no arrivals history: the daily price files carry no
+arrivals column, and the only arrivals data on disk is one raw report for 30 Aug 2026 (about 19 rows, none for
+Nashik), not ingested. Getting the Agmarknet price-and-arrival history for the pilot mandis is planned as a data
+acquisition item. When it lands it will come with its own manifest, and you can test it as a feature.</p>
+<hr />
+<h2>7. The files in this folder</h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aryan_review_2026-10-02.patch</code></td>
+<td>Apply with <code>git apply --index --whitespace=nowarn</code> (the <code>--index</code> stages the 3 deletions; see <code>CLEANUP_COMMANDS.md</code>) on <code>aiaic-forecast</code> at <code>efa3478</code>. Checked: it applies cleanly, and the rehearsed commands leave no address, notebook or data file in the commit. It contains everything in <code>replace/</code> plus the 3 deletions.</td>
+</tr>
+<tr>
+<td><code>replace/</code></td>
+<td>the same changes as plain files at their repository paths, if you prefer to copy</td>
+</tr>
+<tr>
+<td><code>final_suite.txt</code></td>
+<td>the full test run on the review branch with no model present</td>
+</tr>
+<tr>
+<td><code>CLEANUP_COMMANDS.md</code></td>
+<td>the exact commands, in your repository</td>
+</tr>
+</tbody>
+</table>
+<p>Files replaced or added:
+- <code>.env.example</code>, <code>.gitignore</code>, <code>.dockerignore</code>
+- <code>DEP.md</code>, <code>README.md</code>
+- <code>docker/Dockerfile</code>, <code>docker/docker-compose.yml</code>, <code>requirements-serve.txt</code>
+- <code>scripts/check_aiaic_backend.py</code>, <code>scripts/package_forecast_release.py</code>
+- <code>src/api/{routes,schemas,main,forecast_routes}.py</code>, <code>src/forecast/{train,service}.py</code>
+- redacted (address and user name): both <code>official_validation_suite_20261002T063823Z.txt</code>,
+  <code>data/versions/pipeline_report.json</code>
+- <code>tests/api/test_routes.py</code>, <code>tests/integration/{conftest,test_api_integration}.py</code>,
+  <code>tests/forecast/test_one_mandi_is_one_series_across_a_rename.py</code></p>
+<p>Files deleted: <code>backend_checks.ipynb</code>, <code>scripts/check_aiaic_ngrok.py</code>, <code>scripts/package_forecast_backend_bundle.py</code>.</p></body></html>

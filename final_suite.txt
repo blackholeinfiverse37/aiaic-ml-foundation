@@ -1,0 +1,8 @@
+Aryan's test suite on the review branch (efa3478 + aryan_review_2026-10-02.patch), 2026-10-02
+Machine: AIAIC review laptop, Python 3.11, requirements.txt pins; NO model in models/ (a clean clone's state)
+Command: python -m pytest tests -q -p no:cacheprovider
+
+Result: 69 passed, 7 warnings in 26.37s
+Files changed under evidence_packet/ by the run: 0
+
+For comparison, the same command on efa3478 itself: 16 failed, 70 passed (every failure is the 503 'No trained model found' answer, or an assertion on that 503 body)

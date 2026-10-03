@@ -42,8 +42,9 @@ def root():
         "docs": "/docs",
         "health": "/v1/health",
         "ready": "/v1/ready",
-        "predict": "/v1/predict",
         "forecast": "/v1/forecast",
+        "forecast_meta": "/v1/forecast/meta",
+        "retired": {"/v1/predict": "410 Gone: it read the same day's min/max price; use /v1/forecast"},
     }
 
 

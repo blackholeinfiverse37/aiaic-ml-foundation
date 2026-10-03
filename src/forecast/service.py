@@ -32,7 +32,8 @@ class ForecastUnavailable(Exception):
 def _latest(models_dir: Path) -> Path:
     found = sorted(p for p in models_dir.glob("forecast_*.json"))
     if not found:
-        raise ForecastUnavailable(f"No trained forecast in {models_dir}. Run: python -m src.forecast.train")
+        # No server path in the message: it reaches callers in a 503 (review 2026-10-03).
+        raise ForecastUnavailable("No trained forecast is loaded. Run: python -m src.forecast.train")
     return found[-1]
 
 
@@ -125,7 +126,11 @@ def list_meta(models_dir: str) -> Dict:
     keep = ("model_file", "trained_at", "trained_through", "backtest_cutoff", "data_source", "horizons_days",
             "quantiles", "features", "features_never_used", "commodities", "states", "markets", "backtest",
             "range_widening", "target_coverage_p10_p90")
-    return {k: meta[k] for k in keep}
+    out = {k: meta[k] for k in keep}
+    for k in ("market_last_quote", "market_identity"):      # models trained before 2026-10-02 do not have them
+        if k in meta:
+            out[k] = meta[k]
+    return out
 
 
 def reset_cache() -> None:

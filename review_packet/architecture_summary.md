@@ -108,12 +108,10 @@ data/raw/.csv (740,125 rows — real mandi price data, 2023–2025)
 │ (random_seed=42, deterministic) │
 │ │
 │ evaluate.py │
-│ → MAE : 44.07 INR/quintal │
-│ → RMSE : 91.69 INR/quintal │
-│ → MAPE : 4.52% │
-│ → R² : 0.9946 │
-│ → Baseline MAE (naive lag-1): │
-│ 435.46 → model is 10x better │
+│ RETIRED /v1/predict METRICS — NOT FORECAST QUALITY │
+│ Same-day min/max leaked into the same-day modal-price target │
+│ R² 0.9946, MAE 44.07, MAPE 4.52% are invalid accuracy claims │
+│ Evaluate /v1/forecast only from its release backtest │
 │ │
 │ persistence.py │
 │ → Saves model as .joblib │

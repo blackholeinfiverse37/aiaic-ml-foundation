@@ -14,8 +14,8 @@
 | Real dataset used | ✅ 740,125 rows, Indian mandi price data |
 | Deterministic preprocessing | ✅ Hash-verified at every stage |
 | Feature engineering | ✅ Lag (1/7/14d), rolling (7/14/30d), seasonal |
-| Model trained | ✅ LightGBM, R²=0.9946, MAPE=4.52% |
-| Beats naive baseline | ✅ 10x better MAE (44 vs 435) |
+| Forecast-quality evidence | ❌ The retired `/v1/predict` scores below are invalid for forecasting: same-day min/max prices leaked into the target |
+| Forecast service | `/v1/predict` retired (410); use `/v1/forecast` and its release backtest |
 | FastAPI service | ✅ /predict + /health, Pydantic validated |
 | Docker deployment | ✅ Dockerfile + docker-compose (API + Mongo) |
 | Unit tests | ✅ 42/42 passing |
@@ -48,8 +48,8 @@
 - **2,736** rows quarantined (logged with reasons)
 - **735,774** rows used for training after feature engineering
 - **699,750** training rows / **36,024** test rows (time-based split)
-- **R² 0.9946** — model explains 99.46% of price variance
-- **MAE 44.07** INR/quintal average error
-- **MAPE 4.52%** — production-quality accuracy
+- **Retired `/v1/predict` metrics (not forecast quality):** R² 0.9946, MAE 44.07 INR/quintal, MAPE 4.52%.
+  The endpoint used same-day min/max prices to predict the same day's modal price, so these figures are leakage-
+  contaminated and must not be used as model-quality or production-accuracy claims.
 - **42/42** unit tests passing
 - **~55 seconds** full pipeline runtime on 740k rows
